@@ -1,0 +1,33 @@
+.connect-button-wrapper {
+    position: relative;
+}
+
+.connect-btn {
+    min-width: 160px;
+}
+
+.connect-btn.connected {
+    position: relative;
+}
+
+.connect-btn.connected .disconnect-text {
+    display: none;
+}
+
+.connect-btn.connected:hover .address {
+    display: none;
+}
+
+.connect-btn.connected:hover .disconnect-text {
+    display: inline;
+    color: #ef4444;
+}
+
+.connect-btn.connected:hover {
+    border-color: #ef4444;
+}
+
+.address {
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+}
