@@ -227,6 +227,107 @@
     color: var(--color-secondary);
 }
 
+/* Demo divider */
+.demo-divider {
+    display: flex;
+    align-items: center;
+    margin: var(--spacing-lg) 0;
+    color: var(--text-muted);
+}
+
+.demo-divider::before,
+.demo-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border-color);
+}
+
+.demo-divider span {
+    padding: 0 var(--spacing-md);
+}
+
+/* Yellow status */
+.yellow-status {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    background: var(--bg-card);
+    padding: var(--spacing-sm) var(--spacing-md);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-color);
+}
+
+/* Offramp note */
+.offramp-note {
+    margin-top: var(--spacing-md);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+/* Stream actions */
+.stream-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+    margin-top: var(--spacing-md);
+    padding-top: var(--spacing-md);
+    border-top: 1px solid var(--border-color);
+}
+
+/* ENS Profile */
+.ens-profile {
+    background: linear-gradient(135deg, var(--bg-card) 0%, rgba(99, 102, 241, 0.05) 100%);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+}
+
+.ens-details {
+    margin-top: var(--spacing-lg);
+}
+
+.ens-name {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: var(--spacing-lg);
+}
+
+.ens-name .label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-bottom: var(--spacing-xs);
+}
+
+.ens-name .value {
+    font-size: 1.5rem;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    color: var(--color-primary-light);
+}
+
+.ens-records {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-lg);
+}
+
+.record {
+    display: flex;
+    gap: var(--spacing-sm);
+}
+
+.record-key {
+    color: var(--text-muted);
+}
+
+.record-value {
+    font-weight: 500;
+}
+
+.font-mono {
+    font-family: var(--font-mono);
+}
+
 @media (max-width: 768px) {
     .balance-actions {
         flex-direction: column;
