@@ -1,9 +1,11 @@
-import { useState, useEffect } from 'react'
-import { useAccount } from 'wagmi'
+import { useEffect } from 'react'
+import { useAccount, useWalletClient } from 'wagmi'
 import { ConnectButton } from '../components/ConnectButton'
 import { StreamCounter } from '../components/StreamCounter'
 import { useSimulatedStream } from '../hooks/useSimulatedStream'
 import { useYellowChannel } from '../hooks/useYellowChannel'
+import { useCircleWallet } from '../hooks/useCircleWallet'
+import { bridgeService } from '../services/bridge'
 import './Employee.css'
 
 interface IncomeStream {
@@ -17,9 +19,24 @@ interface IncomeStream {
 }
 
 export function Employee() {
+    const { data: walletClient } = useWalletClient()
     const { isConnected, address } = useAccount()
     // Connect to real Yellow Network
-    const { channels, isConnected: isYellowConnected, balance: ledgerBalance } = useYellowChannel()
+    const { channels, balance: ledgerBalance, closeChannel } = useYellowChannel()
+    const {
+        walletId,
+        address: circleAddress,
+        balance: circleBalance,
+        login,
+        isLoading: isCircleLoading
+    } = useCircleWallet()
+
+    // Initialize Bridge
+    useEffect(() => {
+        if (walletClient) {
+            bridgeService.init(walletClient)
+        }
+    }, [walletClient])
 
     // Map real channels to UI format
     // Note: In yellowService, 'employer' is always 'me', 'employee' is counterparty.
@@ -49,8 +66,7 @@ export function Employee() {
         },
     ]
 
-    const [isWithdrawing, setIsWithdrawing] = useState(false)
-    const { start, pause, resume } = useSimulatedStream(0, 0) // Just helpers
+    const { pause, resume } = useSimulatedStream(0, 0) // Just helpers
 
     const mainStream = streams[0]
     const isRealStream = isConnected && realStreams.length > 0
@@ -59,18 +75,46 @@ export function Employee() {
 
     // ... (rest of component) ...
 
-    const handleWithdraw = async (type: 'wallet' | 'bank') => {
-        setIsWithdrawing(true)
-        // For real channels, we would call yellowService.closeChannel or partial withdraw
-        if (isRealStream) {
-            // Placeholder for partial withdraw logic
-            console.log('Withdrawing from channel', mainStream.id)
+    const handleCircleWithdraw = async () => {
+        if (!circleAddress) {
+            alert('No Circle Wallet connected!')
+            return
+        }
+        if (streams.length === 0) {
+            alert('No active stream to withdraw from.')
+            return
+        }
+        if (!isRealStream) {
+            alert('Currently in demo mode. Connect Yellow Network to withdraw real funds.')
+            return
         }
 
-        await new Promise(resolve => setTimeout(resolve, 2000))
+        const confirm = window.confirm(`Withdraw full balance to Circle Wallet (${circleAddress})?`)
+        if (!confirm) return
 
-        alert(`Withdrawal of $${balance.toFixed(2)} to ${type === 'wallet' ? 'your wallet' : 'your bank account'} initiated!`)
-        setIsWithdrawing(false)
+        // Close channel to Circle Wallet Address
+        const mainChannelId = streams[0].id
+        const result = await closeChannel(mainChannelId, circleAddress)
+
+        if (result) {
+            alert('Withdrawal initiated! Funds will arrive in your Circle Wallet shortly.')
+        }
+    }
+
+    const handleBridge = async () => {
+        if (!circleAddress) {
+            alert('No Circle Wallet to bridge from!')
+            return
+        }
+        try {
+            // Bridge 10 USDC from Sepolia to Arc
+            // Using Circle Wallet Address as destination on Arc (it's the same address for EVM)
+            await bridgeService.transferToArc('10', circleAddress)
+            alert('Bridge transaction submitted! Funds moving to Arc Testnet.')
+        } catch (e: any) {
+            console.error(e)
+            alert('Bridge failed: ' + e.message)
+        }
     }
 
     const totalEarned = balance // Simplified for now
@@ -132,20 +176,42 @@ export function Employee() {
                         </span>
                     </div>
                     <div className="balance-actions">
-                        <button
-                            className="btn btn-secondary btn-lg"
-                            onClick={() => handleWithdraw('wallet')}
-                            disabled={isWithdrawing}
-                        >
-                            {isWithdrawing ? 'Processing...' : 'Withdraw to Wallet'}
-                        </button>
-                        <button
-                            className="btn btn-primary btn-lg"
-                            onClick={() => handleWithdraw('bank')}
-                            disabled={isWithdrawing}
-                        >
-                            {isWithdrawing ? 'Processing...' : 'Offramp to Bank'}
-                        </button>
+                        {!walletId ? (
+                            <button
+                                className="btn btn-primary btn-lg google-btn"
+                                onClick={login}
+                                disabled={isCircleLoading}
+                            >
+                                {isCircleLoading ? 'Creating...' : (
+                                    <span className="flex-center gap-sm">
+                                        <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
+                                            <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4" />
+                                            <path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.032-3.716H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34A853" />
+                                            <path d="M3.968 10.705A5.366 5.366 0 0 1 3.682 9c0-.593.102-1.17.286-1.705V4.963H.957A8.997 8.997 0 0 0 0 9c0 1.452.348 2.827.957 4.037l3.011-2.332z" fill="#FBBC05" />
+                                            <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.963l3.011 2.332C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335" />
+                                        </svg>
+                                        Sign in with Google
+                                    </span>
+                                )}
+                            </button>
+                        ) : (
+                            <div className="wallet-connected-actions">
+                                <div className="circle-balance">
+                                    <span className="label">Circle Wallet Balance:</span>
+                                    <span className="value">${circleBalance} USDC</span>
+                                </div>
+                                <button
+                                    className="btn btn-success btn-lg"
+                                    onClick={handleCircleWithdraw}
+                                    disabled={Number(ledgerBalance) === 0}
+                                >
+                                    Withdraw to Circle
+                                </button>
+                                <button className="btn btn-secondary" onClick={handleBridge}>
+                                    Bridge to Arc
+                                </button>
+                            </div>
+                        )}
                     </div>
                     <p className="offramp-note">
                         Powered by Circle Arc Bridge Kit
@@ -175,7 +241,7 @@ export function Employee() {
                         </div>
                     </div>
                 </div>
-            </section>
+            </section >
 
             <section className="income-streams">
                 <h3>Active Income Streams</h3>
@@ -278,6 +344,6 @@ export function Employee() {
                     </div>
                 </div>
             </section>
-        </div>
+        </div >
     )
 }

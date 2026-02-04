@@ -615,15 +615,17 @@ class YellowService {
             this.sessionSigner,
             {
                 destination: recipient as `0x${string}`,
-                amount: amount.toString(),
-                token: token,
+                allocations: [{
+                    asset: token,
+                    amount: amount.toString(),
+                }]
             }
         )
 
         this.ws.send(transferMsg)
     }
 
-    async closeChannel(channelId: string): Promise<string | null> {
+    async closeChannel(channelId: string, destination?: string): Promise<string | null> {
         if (!this.sessionSigner || !this.ws || !this.userAddress) {
             throw new Error('Not connected')
         }
@@ -633,15 +635,13 @@ class YellowService {
             throw new Error('Channel not found')
         }
 
-        console.log('📤 Closing channel:', channelId, 'with counterparty:', channel.employee)
-        console.log('channelID:', channelId.toLowerCase())
-        console.log('userAddress:', this.userAddress.toLowerCase())
-        console.log('session signer:', this.sessionSigner)
+        const closeDest = destination || this.userAddress
+        console.log('📤 Closing channel:', channelId, 'to dest:', closeDest)
 
         const closeMsg = await createCloseChannelMessage(
             this.sessionSigner,
             channelId.toLowerCase() as `0x${string}`,
-            this.userAddress.toLowerCase() as `0x${string}`
+            closeDest.toLowerCase() as `0x${string}`
         )
         this.ws.send(closeMsg)
         return channelId

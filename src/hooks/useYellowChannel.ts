@@ -15,7 +15,7 @@ interface UseYellowChannelReturn {
     channels: PaymentChannel[]
     createChannel: (counterparty: string, depositAmount: bigint, rate: bigint) => Promise<string | null>
     fundChannel: (channelId: string, amount: bigint) => Promise<void>
-    closeChannel: (channelId: string) => Promise<string | null>
+    closeChannel: (channelId: string, destination?: string) => Promise<string | null>
     sendPayment: (amount: bigint, recipient: string) => Promise<void>
     balance: bigint
     error: Error | null
@@ -140,10 +140,10 @@ export function useYellowChannel(): UseYellowChannelReturn {
         }
     }, [])
 
-    const closeChannel = useCallback(async (channelId: string): Promise<string | null> => {
+    const closeChannel = useCallback(async (channelId: string, destination?: string): Promise<string | null> => {
         try {
             setError(null)
-            return await yellowService.closeChannel(channelId)
+            return await yellowService.closeChannel(channelId, destination)
         } catch (err) {
             console.error('Failed to close channel:', err)
             setError(err instanceof Error ? err : new Error('Failed to close channel'))
