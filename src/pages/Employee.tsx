@@ -1,11 +1,14 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useAccount, useWalletClient } from 'wagmi'
 import { ConnectButton } from '../components/ConnectButton'
 import { StreamCounter } from '../components/StreamCounter'
+import { BridgeModal } from '../components/BridgeModal'
 import { useSimulatedStream } from '../hooks/useSimulatedStream'
 import { useYellowChannel } from '../hooks/useYellowChannel'
 import { useCircleWallet } from '../hooks/useCircleWallet'
+import { useENSProfile } from '../hooks/useENS'
 import { bridgeService } from '../services/bridge'
+import { backendApi } from '../api/backend'
 import './Employee.css'
 
 interface IncomeStream {
@@ -24,11 +27,15 @@ export function Employee() {
     // Connect to real Yellow Network
     const { channels, balance: ledgerBalance, closeChannel } = useYellowChannel()
     const {
-        walletId,
         address: circleAddress,
         balance: circleBalance,
         login,
-        isLoading: isCircleLoading
+        logout: circleLogout,
+        refreshBalance,
+        isLoading: isCircleLoading,
+        isRestoring: isCircleRestoring,
+        isConnected: isCircleConnected,
+        error: circleError,
     } = useCircleWallet()
 
     // Initialize Bridge
@@ -37,6 +44,9 @@ export function Employee() {
             bridgeService.init(walletClient)
         }
     }, [walletClient])
+
+    // ENS Profile lookup
+    const { profile: ensProfile, isLoading: isLoadingENS } = useENSProfile(address || null)
 
     // Map real channels to UI format
     // Note: In yellowService, 'employer' is always 'me', 'employee' is counterparty.
@@ -68,53 +78,84 @@ export function Employee() {
 
     const { pause, resume } = useSimulatedStream(0, 0) // Just helpers
 
+    // Transaction status tracking
+    const [isWithdrawing, setIsWithdrawing] = useState(false)
+    const [txStatus, setTxStatus] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null)
+    const [isBridgeModalOpen, setIsBridgeModalOpen] = useState(false)
+
     const mainStream = streams[0]
     const isRealStream = isConnected && realStreams.length > 0
     const balance = mainStream?.accumulated || 0
     const isStreaming = mainStream?.isActive
 
-    // ... (rest of component) ...
+    // Clear status after 5 seconds
+    useEffect(() => {
+        if (txStatus) {
+            const timer = setTimeout(() => setTxStatus(null), 5000)
+            return () => clearTimeout(timer)
+        }
+    }, [txStatus])
 
     const handleCircleWithdraw = async () => {
         if (!circleAddress) {
-            alert('No Circle Wallet connected!')
+            setTxStatus({ type: 'error', message: 'No Circle Wallet connected!' })
             return
         }
         if (streams.length === 0) {
-            alert('No active stream to withdraw from.')
+            setTxStatus({ type: 'error', message: 'No active stream to withdraw from.' })
             return
         }
         if (!isRealStream) {
-            alert('Currently in demo mode. Connect Yellow Network to withdraw real funds.')
+            setTxStatus({ type: 'info', message: 'Demo mode - connect Yellow Network to withdraw real funds.' })
             return
         }
 
-        const confirm = window.confirm(`Withdraw full balance to Circle Wallet (${circleAddress})?`)
+        const confirm = window.confirm(`Withdraw $${balance.toFixed(2)} to Circle Wallet?`)
         if (!confirm) return
 
-        // Close channel to Circle Wallet Address
-        const mainChannelId = streams[0].id
-        const result = await closeChannel(mainChannelId, circleAddress)
+        setIsWithdrawing(true)
+        setTxStatus({ type: 'info', message: 'Processing withdrawal...' })
 
-        if (result) {
-            alert('Withdrawal initiated! Funds will arrive in your Circle Wallet shortly.')
+        try {
+            const mainChannelId = streams[0].id
+            const result = await closeChannel(mainChannelId, circleAddress)
+
+            if (result) {
+                setTxStatus({ type: 'success', message: 'Withdrawal successful! Funds sent to Circle Wallet.' })
+                // Refresh Circle balance after a delay
+                setTimeout(() => refreshBalance(), 3000)
+            } else {
+                setTxStatus({ type: 'error', message: 'Withdrawal failed. Please try again.' })
+            }
+        } catch (e: any) {
+            console.error(e)
+            setTxStatus({ type: 'error', message: `Withdrawal failed: ${e.message}` })
+        } finally {
+            setIsWithdrawing(false)
         }
     }
 
-    const handleBridge = async () => {
+    const handleOpenBridgeModal = () => {
         if (!circleAddress) {
-            alert('No Circle Wallet to bridge from!')
+            setTxStatus({ type: 'error', message: 'No Circle Wallet to bridge from!' })
             return
         }
-        try {
-            // Bridge 10 USDC from Sepolia to Arc
-            // Using Circle Wallet Address as destination on Arc (it's the same address for EVM)
-            await bridgeService.transferToArc('10', circleAddress)
-            alert('Bridge transaction submitted! Funds moving to Arc Testnet.')
-        } catch (e: any) {
-            console.error(e)
-            alert('Bridge failed: ' + e.message)
-        }
+        setIsBridgeModalOpen(true)
+    }
+
+    const handleBridgeToArc = async (amount: string) => {
+        if (!circleAddress) throw new Error('No wallet connected')
+        await bridgeService.transferToArc(amount, circleAddress)
+        // Refresh balance after bridge
+        setTimeout(() => refreshBalance(), 5000)
+    }
+
+    const handleBridgeToBank = async (amount: string) => {
+        if (!circleAddress) throw new Error('No wallet connected')
+        // Use Circle's payout API (mock for demo)
+        await backendApi.payout(amount, 'bank-account')
+        // Refresh balance after payout
+        setTimeout(() => refreshBalance(), 3000)
     }
 
     const totalEarned = balance // Simplified for now
@@ -176,43 +217,86 @@ export function Employee() {
                         </span>
                     </div>
                     <div className="balance-actions">
-                        {!walletId ? (
-                            <button
-                                className="btn btn-primary btn-lg google-btn"
-                                onClick={login}
-                                disabled={isCircleLoading}
-                            >
-                                {isCircleLoading ? 'Creating...' : (
-                                    <span className="flex-center gap-sm">
-                                        <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
-                                            <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4" />
-                                            <path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.032-3.716H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34A853" />
-                                            <path d="M3.968 10.705A5.366 5.366 0 0 1 3.682 9c0-.593.102-1.17.286-1.705V4.963H.957A8.997 8.997 0 0 0 0 9c0 1.452.348 2.827.957 4.037l3.011-2.332z" fill="#FBBC05" />
-                                            <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.963l3.011 2.332C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335" />
-                                        </svg>
-                                        Sign in with Google
-                                    </span>
-                                )}
-                            </button>
+                        {isCircleRestoring ? (
+                            <div className="circle-loading">
+                                <span className="spinner"></span>
+                                <span>Restoring session...</span>
+                            </div>
+                        ) : !isCircleConnected ? (
+                            <>
+                                <button
+                                    className="btn btn-primary btn-lg google-btn"
+                                    onClick={login}
+                                    disabled={isCircleLoading}
+                                >
+                                    {isCircleLoading ? 'Connecting...' : (
+                                        <span className="flex-center gap-sm">
+                                            <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
+                                                <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4" />
+                                                <path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.032-3.716H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34A853" />
+                                                <path d="M3.968 10.705A5.366 5.366 0 0 1 3.682 9c0-.593.102-1.17.286-1.705V4.963H.957A8.997 8.997 0 0 0 0 9c0 1.452.348 2.827.957 4.037l3.011-2.332z" fill="#FBBC05" />
+                                                <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.963l3.011 2.332C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335" />
+                                            </svg>
+                                            Sign in with Google
+                                        </span>
+                                    )}
+                                </button>
+                                {circleError && <p className="error-text">{circleError}</p>}
+                            </>
                         ) : (
                             <div className="wallet-connected-actions">
-                                <div className="circle-balance">
-                                    <span className="label">Circle Wallet Balance:</span>
-                                    <span className="value">${circleBalance} USDC</span>
+                                <div className="circle-wallet-info">
+                                    <div className="circle-balance">
+                                        <span className="label">Circle Wallet:</span>
+                                        <span className="address font-mono">
+                                            {circleAddress?.slice(0, 6)}...{circleAddress?.slice(-4)}
+                                        </span>
+                                    </div>
+                                    <div className="circle-balance">
+                                        <span className="label">Balance:</span>
+                                        <span className="value">${circleBalance} USDC</span>
+                                        <button
+                                            className="btn btn-sm btn-ghost"
+                                            onClick={refreshBalance}
+                                            title="Refresh balance"
+                                        >
+                                            ↻
+                                        </button>
+                                    </div>
                                 </div>
-                                <button
-                                    className="btn btn-success btn-lg"
-                                    onClick={handleCircleWithdraw}
-                                    disabled={Number(ledgerBalance) === 0}
-                                >
-                                    Withdraw to Circle
-                                </button>
-                                <button className="btn btn-secondary" onClick={handleBridge}>
-                                    Bridge to Arc
-                                </button>
+                                <div className="circle-actions">
+                                    <button
+                                        className="btn btn-success btn-lg"
+                                        onClick={handleCircleWithdraw}
+                                        disabled={Number(ledgerBalance) === 0 || isWithdrawing}
+                                    >
+                                        {isWithdrawing ? 'Processing...' : 'Withdraw to Circle'}
+                                    </button>
+                                    <button
+                                        className="btn btn-secondary"
+                                        onClick={handleOpenBridgeModal}
+                                        disabled={parseFloat(circleBalance) <= 0}
+                                    >
+                                        Bridge / Withdraw
+                                    </button>
+                                    <button
+                                        className="btn btn-outline btn-sm"
+                                        onClick={circleLogout}
+                                    >
+                                        Disconnect
+                                    </button>
+                                </div>
                             </div>
                         )}
                     </div>
+                    {txStatus && (
+                        <div className={`tx-status ${txStatus.type}`}>
+                            {txStatus.type === 'info' && <span className="spinner-sm"></span>}
+                            {txStatus.type === 'success' && <span>✓</span>}
+                            {txStatus.type === 'error' && <span>✗</span>}
+                            <span>{txStatus.message}</span>
+                        </div>
+                    )}
                     <p className="offramp-note">
                         Powered by Circle Arc Bridge Kit
                     </p>
@@ -323,27 +407,74 @@ export function Employee() {
             {/* ENS Profile Section */}
             <section className="ens-profile card mt-xl">
                 <h3>🔗 Your ENS Profile</h3>
-                <div className="ens-details">
-                    <div className="ens-name">
-                        <span className="label">Payment Address</span>
-                        <span className="value">maria.nexus.eth</span>
+                {isLoadingENS ? (
+                    <div className="ens-loading">
+                        <span className="spinner"></span>
+                        <span>Loading ENS profile...</span>
                     </div>
-                    <div className="ens-records">
-                        <div className="record">
-                            <span className="record-key">Preferred Asset:</span>
-                            <span className="record-value">USDC</span>
+                ) : (
+                    <div className="ens-details">
+                        <div className="ens-header">
+                            {ensProfile?.avatar && (
+                                <img
+                                    src={ensProfile.avatar}
+                                    alt="ENS Avatar"
+                                    className="ens-avatar"
+                                />
+                            )}
+                            <div className="ens-name">
+                                <span className="label">Payment Address</span>
+                                <span className="value">
+                                    {ensProfile?.name || `${address?.slice(0, 10)}...${address?.slice(-8)}`}
+                                </span>
+                            </div>
                         </div>
-                        <div className="record">
-                            <span className="record-key">Payment Schedule:</span>
-                            <span className="record-value">Per Minute</span>
+                        <div className="ens-records">
+                            <div className="record">
+                                <span className="record-key">Preferred Asset:</span>
+                                <span className="record-value">
+                                    {ensProfile?.preferredStablecoin || 'USDC'}
+                                </span>
+                            </div>
+                            <div className="record">
+                                <span className="record-key">Payment Schedule:</span>
+                                <span className="record-value">
+                                    {ensProfile?.paymentSchedule === 'per_minute' ? 'Per Minute' :
+                                     ensProfile?.paymentSchedule === 'hourly' ? 'Hourly' :
+                                     ensProfile?.paymentSchedule === 'daily' ? 'Daily' : 'Per Minute'}
+                                </span>
+                            </div>
+                            {ensProfile?.taxJurisdiction && (
+                                <div className="record">
+                                    <span className="record-key">Tax Jurisdiction:</span>
+                                    <span className="record-value">{ensProfile.taxJurisdiction}</span>
+                                </div>
+                            )}
+                            <div className="record">
+                                <span className="record-key">Wallet:</span>
+                                <span className="record-value font-mono">
+                                    {address?.slice(0, 10)}...{address?.slice(-8)}
+                                </span>
+                            </div>
                         </div>
-                        <div className="record">
-                            <span className="record-key">Wallet:</span>
-                            <span className="record-value font-mono">{address?.slice(0, 10)}...{address?.slice(-8)}</span>
-                        </div>
+                        {!ensProfile?.name && (
+                            <p className="ens-hint">
+                                Get an ENS name at <a href="https://app.ens.domains" target="_blank" rel="noopener noreferrer">ens.domains</a> to customize your payment profile.
+                            </p>
+                        )}
                     </div>
-                </div>
+                )}
             </section>
+
+            {/* Bridge Modal */}
+            <BridgeModal
+                isOpen={isBridgeModalOpen}
+                onClose={() => setIsBridgeModalOpen(false)}
+                balance={circleBalance}
+                walletAddress={circleAddress}
+                onBridgeToArc={handleBridgeToArc}
+                onBridgeToBank={handleBridgeToBank}
+            />
         </div >
     )
 }

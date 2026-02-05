@@ -190,6 +190,71 @@
     color: var(--color-accent);
 }
 
+/* ENS Resolution UI */
+.input-with-status {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.input-with-status .input {
+    flex: 1;
+    padding-right: 40px;
+}
+
+.input-with-status .input.valid {
+    border-color: var(--color-secondary);
+}
+
+.input-with-status .input.invalid {
+    border-color: var(--color-danger);
+}
+
+.input-status {
+    position: absolute;
+    right: 12px;
+    font-size: 0.875rem;
+}
+
+.input-status.resolving {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+}
+
+.input-status.valid {
+    color: var(--color-secondary);
+}
+
+.input-status.invalid {
+    color: var(--color-danger);
+}
+
+.resolved-address {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    margin-top: var(--spacing-xs);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.ens-badge {
+    background: rgba(99, 102, 241, 0.1);
+    color: var(--color-primary-light);
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+}
+
+.resolved-address .arrow {
+    color: var(--text-muted);
+}
+
+.resolved-address .address {
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+}
+
 @media (max-width: 768px) {
     .page-header {
         flex-direction: column;

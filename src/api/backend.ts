@@ -1,5 +1,6 @@
+import { env } from '../config/env'
 
-const API_URL = 'http://localhost:3000/api'
+const API_URL = env.apiUrl
 
 export const backendApi = {
     /**
@@ -76,6 +77,21 @@ export const backendApi = {
             body: JSON.stringify({ amount, destination })
         })
         if (!response.ok) throw new Error('Failed to payout')
+        return response.json()
+    },
+
+    /**
+     * Get Wallet Balance
+     * Returns token balances for a wallet
+     * Note: userToken is optional - if not provided, returns empty balance
+     */
+    getWalletBalance: async (walletId: string, userToken?: string) => {
+        const response = await fetch(`${API_URL}/wallets/balance`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ walletId, userToken })
+        })
+        if (!response.ok) throw new Error('Failed to get balance')
         return response.json()
     }
 }

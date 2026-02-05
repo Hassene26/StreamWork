@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useAccount } from 'wagmi'
 import { ConnectButton } from '../components/ConnectButton'
 import { useYellowChannel } from '../hooks/useYellowChannel'
+import { useResolveInput } from '../hooks/useENS'
 import './Employer.css'
 
 interface EmployeeDisplay {
@@ -34,6 +35,14 @@ export function Employer() {
     const [isOpening, setIsOpening] = useState(false)
 
     const [pausedEmployees, setPausedEmployees] = useState<Record<string, boolean>>({})
+
+    // ENS resolution for new employee input
+    const {
+        address: resolvedAddress,
+        ensName: resolvedEnsName,
+        isValid: isAddressValid,
+        isLoading: isResolvingENS
+    } = useResolveInput(newEmployee)
 
     // Sync channels to employee display (preserve demo employees)
     useEffect(() => {
@@ -92,22 +101,19 @@ export function Employer() {
 
     const handleAddEmployee = async () => {
         console.log("calling handleAddEmployee")
-        if (!newEmployee || !depositAmount) return
+        if (!newEmployee || !depositAmount || !isAddressValid || !resolvedAddress) {
+            console.warn('Invalid input or address not resolved')
+            return
+        }
 
         setIsOpening(true)
         try {
-            // Determine if it's an ENS name
-            const isEns = newEmployee.includes('.eth')
-            const address = isEns
-                ? '0x' + '0'.repeat(40) // Placeholder
-                : newEmployee
-
             // Convert to 6 decimals
             const depositUnits = BigInt(Math.floor(Number(depositAmount) * 1_000_000))
             const rateUnits = BigInt(Math.floor(Number(ratePerMinute) * 1_000_000))
 
-            // Create channel via Yellow SDK (Off-Chain setup + On-Chain fund)
-            await createChannel(address, depositUnits, rateUnits)
+            // Create channel via Yellow SDK using resolved address
+            await createChannel(resolvedAddress, depositUnits, rateUnits)
 
             // Clear form
             setNewEmployee('')
@@ -194,13 +200,36 @@ export function Employer() {
                 <div className="add-employee-form">
                     <div className="form-group">
                         <label className="label">Employee Address or ENS</label>
-                        <input
-                            type="text"
-                            className="input"
-                            placeholder="maria.company.eth or 0x..."
-                            value={newEmployee}
-                            onChange={(e) => setNewEmployee(e.target.value)}
-                        />
+                        <div className="input-with-status">
+                            <input
+                                type="text"
+                                className={`input ${newEmployee && (isAddressValid ? 'valid' : 'invalid')}`}
+                                placeholder="maria.company.eth or 0x..."
+                                value={newEmployee}
+                                onChange={(e) => setNewEmployee(e.target.value)}
+                            />
+                            {isResolvingENS && (
+                                <span className="input-status resolving">Resolving...</span>
+                            )}
+                            {!isResolvingENS && newEmployee && isAddressValid && (
+                                <span className="input-status valid">✓</span>
+                            )}
+                            {!isResolvingENS && newEmployee && !isAddressValid && (
+                                <span className="input-status invalid">✗</span>
+                            )}
+                        </div>
+                        {resolvedAddress && resolvedEnsName && (
+                            <div className="resolved-address">
+                                <span className="ens-badge">{resolvedEnsName}</span>
+                                <span className="arrow">→</span>
+                                <span className="address">{resolvedAddress.slice(0, 10)}...{resolvedAddress.slice(-8)}</span>
+                            </div>
+                        )}
+                        {resolvedAddress && !resolvedEnsName && newEmployee.includes('.') && (
+                            <div className="resolved-address">
+                                <span className="address">{resolvedAddress.slice(0, 10)}...{resolvedAddress.slice(-8)}</span>
+                            </div>
+                        )}
                     </div>
                     <div className="form-group">
                         <label className="label">Deposit (USDC)</label>
@@ -226,9 +255,9 @@ export function Employer() {
                     <button
                         className="btn btn-primary"
                         onClick={handleAddEmployee}
-                        disabled={isOpening || !yellowConnected}
+                        disabled={isOpening || !yellowConnected || !isAddressValid || isResolvingENS}
                     >
-                        {isOpening ? 'Opening...' : 'Open Channel'}
+                        {isOpening ? 'Opening...' : isResolvingENS ? 'Resolving...' : 'Open Channel'}
                     </button>
                 </div>
             </section>

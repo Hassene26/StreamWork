@@ -328,6 +328,196 @@
     font-family: var(--font-mono);
 }
 
+/* ENS Profile Enhancements */
+.ens-loading {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    color: var(--text-muted);
+    padding: var(--spacing-lg) 0;
+}
+
+.ens-header {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-lg);
+    margin-bottom: var(--spacing-lg);
+}
+
+.ens-avatar {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    border: 2px solid var(--color-primary);
+}
+
+.ens-hint {
+    margin-top: var(--spacing-lg);
+    font-size: 0.875rem;
+    color: var(--text-muted);
+}
+
+.ens-hint a {
+    color: var(--color-primary-light);
+    text-decoration: underline;
+}
+
+/* Circle Wallet UI */
+.circle-loading {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    color: var(--text-muted);
+}
+
+.circle-loading .spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--border-color);
+    border-top-color: var(--color-primary);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.wallet-connected-actions {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+    align-items: center;
+    width: 100%;
+    max-width: 400px;
+}
+
+.circle-wallet-info {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-md);
+    background: rgba(99, 102, 241, 0.1);
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    width: 100%;
+}
+
+.circle-wallet-info .circle-balance {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.circle-wallet-info .label {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+}
+
+.circle-wallet-info .address {
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+}
+
+.circle-wallet-info .value {
+    font-weight: 600;
+    color: var(--color-secondary);
+    font-family: var(--font-mono);
+}
+
+.circle-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+    justify-content: center;
+}
+
+.btn-ghost {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: var(--spacing-xs);
+    font-size: 1rem;
+    transition: color 0.2s;
+}
+
+.btn-ghost:hover {
+    color: var(--text-primary);
+}
+
+.error-text {
+    color: var(--color-danger);
+    font-size: 0.875rem;
+    margin-top: var(--spacing-sm);
+}
+
+/* Transaction Status */
+.tx-status {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm) var(--spacing-md);
+    border-radius: var(--radius-md);
+    font-size: 0.875rem;
+    margin-top: var(--spacing-md);
+    animation: slideIn 0.3s ease;
+}
+
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.tx-status.info {
+    background: rgba(99, 102, 241, 0.1);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    color: var(--color-primary-light);
+}
+
+.tx-status.success {
+    background: rgba(16, 185, 129, 0.1);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    color: var(--color-secondary);
+}
+
+.tx-status.error {
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: var(--color-danger);
+}
+
+.spinner-sm {
+    width: 14px;
+    height: 14px;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+.google-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-sm);
+}
+
+.flex-center {
+    display: flex;
+    align-items: center;
+}
+
+.gap-sm {
+    gap: var(--spacing-sm);
+}
+
 @media (max-width: 768px) {
     .balance-actions {
         flex-direction: column;
@@ -340,5 +530,14 @@
     .stream-details {
         flex-direction: column;
         gap: var(--spacing-sm);
+    }
+
+    .circle-actions {
+        flex-direction: column;
+        width: 100%;
+    }
+
+    .circle-actions .btn {
+        width: 100%;
     }
 }

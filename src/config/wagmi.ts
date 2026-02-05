@@ -1,8 +1,9 @@
 import { http, createConfig } from 'wagmi'
 import { mainnet, sepolia } from 'wagmi/chains'
 import { injected, walletConnect } from 'wagmi/connectors'
+import { env } from './env'
 
-const projectId = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID || 'streamwork-hackmoney-2026' // Get one at https://cloud.walletconnect.com
+const projectId = env.walletConnectProjectId
 
 export const config = createConfig({
     chains: [mainnet, sepolia],

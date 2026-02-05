@@ -6,6 +6,7 @@
   --color-secondary: #10b981;
   --color-secondary-dark: #059669;
   --color-accent: #f59e0b;
+  --color-danger: #ef4444;
   
   /* Backgrounds */
   --bg-dark: #0f0f23;
@@ -254,6 +255,20 @@ a:hover {
 .animate-pulse { animation: pulse 2s infinite; }
 .animate-slideUp { animation: slideUp 0.5s ease-out; }
 .animate-glow { animation: glow 2s infinite; }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Global spinner */
+.spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
 
 /* Streaming counter specific */
 .stream-counter {

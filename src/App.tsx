@@ -3,6 +3,10 @@ import { Landing } from './pages/Landing'
 import { Employer } from './pages/Employer'
 import { Employee } from './pages/Employee'
 import { Header } from './components/Header'
+import { validateEnv } from './config/env'
+
+// Validate environment on app load
+validateEnv()
 
 function App() {
     return (

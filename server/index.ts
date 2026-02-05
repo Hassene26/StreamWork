@@ -1,11 +1,12 @@
-
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import path from 'path';
 import { initiateUserControlledWalletsClient } from '@circle-fin/user-controlled-wallets';
 import { v4 as uuidv4 } from 'uuid';
 
-dotenv.config();
+// Load .env from parent directory (project root)
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -15,8 +16,12 @@ app.use(express.json());
 
 // Initialize Circle User-Controlled Wallets Client
 // 🛑 CRITICAL: This API Key and Entity Secret MUST remain server-side.
+const apiKey = process.env.CIRCLE_API_KEY || '';
+console.log('Circle API Key loaded:', apiKey ? `${apiKey.substring(0, 20)}...` : 'MISSING');
+console.log('API Key format check - contains colons:', apiKey.includes(':'));
+
 const circleClient = initiateUserControlledWalletsClient({
-    apiKey: process.env.CIRCLE_API_KEY || '',
+    apiKey: apiKey,
 });
 
 // Middleware to log requests
@@ -124,6 +129,23 @@ app.get('/api/wallets/:userId', async (req, res) => {
     } catch (error: any) {
         console.error('Get Wallets Error:', error?.response?.data || error.message);
         res.status(500).json({ error: 'Failed to get wallets', details: error?.response?.data });
+    }
+});
+
+// 6. Get Wallet Balance
+// Note: For user-controlled wallets, we need userToken from frontend
+app.post('/api/wallets/balance', async (req, res) => {
+    try {
+        const { walletId, userToken } = req.body;
+        const response = await circleClient.getWalletTokenBalance({
+            walletId: walletId,
+            userToken: userToken,
+        });
+        res.json(response.data);
+    } catch (error: any) {
+        console.error('Get Balance Error:', error?.response?.data || error.message);
+        // Return empty balance on error (non-critical)
+        res.json({ tokenBalances: [] });
     }
 });
 
