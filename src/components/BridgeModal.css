@@ -13,8 +13,13 @@
 }
 
 @keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
 }
 
 .modal-content {
@@ -33,6 +38,7 @@
         opacity: 0;
         transform: translateY(20px);
     }
+
     to {
         opacity: 1;
         transform: translateY(0);
@@ -296,5 +302,171 @@
 }
 
 @keyframes spin {
-    to { transform: rotate(360deg); }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Chain Selection Grid */
+.bridge-chain .label,
+.bridge-address .label,
+.bank-info .label {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: var(--spacing-sm);
+}
+
+.chain-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--spacing-sm);
+}
+
+.chain-option {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--spacing-xs);
+    padding: var(--spacing-md) var(--spacing-sm);
+    background: var(--bg-dark);
+    border: 2px solid var(--border-color);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.chain-option:hover {
+    border-color: var(--color-primary);
+}
+
+.chain-option.active {
+    border-color: var(--color-primary);
+    background: rgba(99, 102, 241, 0.1);
+}
+
+.chain-icon {
+    font-size: 1.25rem;
+}
+
+.chain-name {
+    font-size: 0.7rem;
+    font-weight: 500;
+    text-align: center;
+}
+
+/* Address Input */
+.address-input-wrapper {
+    display: flex;
+    align-items: center;
+    background: var(--bg-dark);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-sm) var(--spacing-md);
+}
+
+.address-input-wrapper input {
+    flex: 1;
+    background: none;
+    border: none;
+    font-size: 0.875rem;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+    outline: none;
+}
+
+.address-input-wrapper input::placeholder {
+    color: var(--text-muted);
+}
+
+.use-my-btn {
+    background: var(--color-secondary);
+    color: white;
+    border: none;
+    padding: var(--spacing-xs) var(--spacing-sm);
+    border-radius: var(--radius-sm);
+    font-size: 0.7rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+    white-space: nowrap;
+}
+
+.use-my-btn:hover {
+    background: #059669;
+}
+
+/* Bank Info */
+.bank-card {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-md);
+    background: var(--bg-dark);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-color);
+}
+
+.bank-icon {
+    font-size: 1.5rem;
+}
+
+.bank-details {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.bank-name {
+    font-weight: 600;
+}
+
+.bank-status {
+    font-size: 0.75rem;
+    color: var(--color-secondary);
+}
+
+.bank-note {
+    margin-top: var(--spacing-sm);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+/* Withdrawal Preview */
+.withdraw-preview {
+    background: rgba(99, 102, 241, 0.05);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md);
+}
+
+.preview-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--spacing-xs) 0;
+    font-size: 0.875rem;
+}
+
+.preview-row.total {
+    border-top: 1px solid var(--border-color);
+    margin-top: var(--spacing-sm);
+    padding-top: var(--spacing-sm);
+    font-weight: 600;
+}
+
+.preview-value {
+    font-family: var(--font-mono);
+}
+
+@media (max-width: 480px) {
+    .chain-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .destination-options {
+        grid-template-columns: 1fr;
+    }
 }

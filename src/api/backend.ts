@@ -45,7 +45,7 @@ export const backendApi = {
     },
 
     /**
-     * Initialize a wallet (Generate Challenge)
+     * Initialize a wallet (Generate Challenge) - Legacy method using userId
      * Returns: { challengeId }
      */
     initWallet: async (userId: string, blockchains = ['ETH-SEPOLIA']) => {
@@ -59,11 +59,43 @@ export const backendApi = {
     },
 
     /**
-     * Get User Wallets
+     * Initialize User for Social Login (using userToken from OAuth)
+     * Returns: { challengeId } or error code 155106 if already initialized
+     */
+    initializeUser: async (userToken: string, blockchains = ['ETH-SEPOLIA']) => {
+        const response = await fetch(`${API_URL}/users/initialize`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userToken, blockchains })
+        })
+        const data = await response.json()
+        // Don't throw for 155106 (user already initialized) - caller handles this
+        if (!response.ok && data?.code !== 155106) {
+            throw new Error(data?.message || 'Failed to initialize user')
+        }
+        return { ...data, status: response.status }
+    },
+
+    /**
+     * Get User Wallets (legacy - by userId)
      */
     getWallets: async (userId: string) => {
         const response = await fetch(`${API_URL}/wallets/${userId}`)
         if (!response.ok) throw new Error('Failed to get wallets')
+        return response.json()
+    },
+
+    /**
+     * List Wallets using userToken (for social login flow)
+     * Returns: { wallets: [...] }
+     */
+    listWalletsByToken: async (userToken: string) => {
+        const response = await fetch(`${API_URL}/wallets/list`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userToken })
+        })
+        if (!response.ok) throw new Error('Failed to list wallets')
         return response.json()
     },
 
@@ -83,7 +115,6 @@ export const backendApi = {
     /**
      * Get Wallet Balance
      * Returns token balances for a wallet
-     * Note: userToken is optional - if not provided, returns empty balance
      */
     getWalletBalance: async (walletId: string, userToken?: string) => {
         const response = await fetch(`${API_URL}/wallets/balance`, {
@@ -95,3 +126,4 @@ export const backendApi = {
         return response.json()
     }
 }
+

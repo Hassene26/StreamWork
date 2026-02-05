@@ -17,6 +17,7 @@ import {
     createCloseChannelMessage,
     createGetLedgerBalancesMessage,
     createTransferMessage,
+    createSubmitAppStateMessage,
 } from '@erc7824/nitrolite'
 import { createPublicClient, http } from 'viem'
 import { sepolia } from 'viem/chains'
@@ -46,6 +47,7 @@ export interface PaymentChannel {
     employerBalance: bigint
     ratePerMinute: bigint
     status: ChannelStatus
+    version: bigint
     createdAt: Date
     lastUpdate: Date
 }
@@ -258,6 +260,10 @@ class YellowService {
                     await this.handleChannelClosed(payload)
                     break
 
+                case 'transfer':
+                    this.handleTransferComplete(payload)
+                    break
+
                 case 'cu': // Channel Update notification
                     this.handleSingleChannelUpdate(payload)
                     break
@@ -265,6 +271,12 @@ class YellowService {
                 case 'bu': // Balance Update notification
                     console.log('💰 Balance update received:', payload)
                     this.handleBalanceUpdate(payload)
+                    break
+
+                case 'ledger_balances':
+                case 'get_ledger_balances':
+                    console.log('📊 Ledger balances received:', payload)
+                    this.handleLedgerBalancesUpdate(payload)
                     break
 
                 case 'error':
@@ -364,25 +376,81 @@ class YellowService {
      * Handle single channel update (cu)
      */
     private handleSingleChannelUpdate(ch: any): void {
-        console.log('🔄 Processing channel update:', ch.channel_id)
+        console.log('🔄 Processing channel update:', ch.channel_id, ch)
 
-        // If we already have the channel, preserve known employee address
+        // If we already have the channel, preserve known data
         const existing = this.channels.get(ch.channel_id)
-        const employeeAddress = existing?.employee || ch.counterparty || ch.participant || ''
+
+        // Determine counterparty (Employee)
+        let employeeAddress = existing?.employee
+
+        if (!employeeAddress) {
+            const myAddress = this.userAddress?.toLowerCase() || ''
+
+            // Try 'participants' array (standard Nitro)
+            if (ch.participants && Array.isArray(ch.participants)) {
+                const other = ch.participants.find((p: string) => p.toLowerCase() !== myAddress)
+                if (other) employeeAddress = other
+            }
+
+            // Try 'counterparty' field
+            if (!employeeAddress && ch.counterparty && ch.counterparty.toLowerCase() !== myAddress) {
+                employeeAddress = ch.counterparty
+            }
+
+            // Try 'participant' field (sometimes used for sender/initiator, risky but fallback)
+            if (!employeeAddress && ch.participant && ch.participant.toLowerCase() !== myAddress) {
+                employeeAddress = ch.participant
+            }
+        }
+
+        employeeAddress = employeeAddress || ''
+
+        // Preserve existing balance tracking if we have it
+        const currentEmployerBalance = existing?.employerBalance || BigInt(ch.amount || 0)
+        const currentEmployeeBalance = existing?.employeeBalance || 0n
+        const currentRate = existing?.ratePerMinute || BigInt(ch.rate || 750000)
+
+        // Smart update for Total Deposit:
+        // If server sends '0' (placeholder) but we know it's funded, keep our local value
+        let newTotalDeposit = BigInt(ch.amount || 0)
+        if (newTotalDeposit === 0n && existing?.totalDeposit && existing.totalDeposit > 0n) {
+            console.log('⚠️ Server sent amount=0 but we have local deposit, preserving:', existing.totalDeposit)
+            newTotalDeposit = existing.totalDeposit
+        } else if (existing?.totalDeposit && newTotalDeposit !== existing.totalDeposit) {
+            // If server sends a different non-zero amount, use it (could be withdrawal)
+            newTotalDeposit = BigInt(ch.amount || 0)
+        }
+        else if (!existing && newTotalDeposit === 0n) {
+            // New channel with 0 amount (just created)
+            newTotalDeposit = 0n
+        }
+        else {
+            // specific override logic
+            newTotalDeposit = BigInt(ch.amount || existing?.totalDeposit || 0)
+        }
+
 
         const channel: PaymentChannel = {
             id: ch.channel_id,
             employer: this.userAddress || '',
             employee: employeeAddress,
-            totalDeposit: BigInt(ch.amount || 0),
-            employerBalance: BigInt(ch.amount || 0),
-            employeeBalance: 0n,
-            ratePerMinute: 750000n,
+            totalDeposit: newTotalDeposit,
+            // Preserve balances if they exist, only update from server if explicitly provided
+            employerBalance: ch.employer_balance
+                ? BigInt(ch.employer_balance)
+                : currentEmployerBalance,
+            employeeBalance: ch.employee_balance
+                ? BigInt(ch.employee_balance)
+                : currentEmployeeBalance,
+            ratePerMinute: currentRate,
             status: ch.status as ChannelStatus,
-            createdAt: ch.created_at ? new Date(ch.created_at) : new Date(),
+            version: ch.version ? BigInt(ch.version) : (existing?.version || 0n),
+            createdAt: ch.created_at ? new Date(ch.created_at) : (existing?.createdAt || new Date()),
             lastUpdate: ch.updated_at ? new Date(ch.updated_at) : new Date(),
         }
         this.channels.set(channel.id, channel)
+        console.log('📢 Notifying channel update:', channel.id, 'Status:', channel.status, 'EmpBal:', channel.employerBalance)
         this.notifyChannelUpdate(channel)
     }
 
@@ -395,6 +463,72 @@ class YellowService {
 
         for (const ch of channels) {
             this.handleSingleChannelUpdate(ch)
+        }
+    }
+
+    /**
+     * Handle successful transfer completion
+     */
+    private handleTransferComplete(payload: any): void {
+        console.log('✅ Transfer complete:', payload)
+
+        // Extract transfer details
+        const { amount, destination, asset } = payload || {}
+
+        if (amount && destination) {
+            console.log(`💸 Transferred ${amount} ${asset || 'USDC'} to ${destination}`)
+
+            // Find and update the channel for this recipient
+            for (const [channelId, channel] of this.channels) {
+                if (channel.employee.toLowerCase() === destination.toLowerCase()) {
+                    // Update channel balances
+                    const transferAmount = BigInt(amount)
+                    channel.employeeBalance += transferAmount
+                    channel.employerBalance = channel.employerBalance > transferAmount
+                        ? channel.employerBalance - transferAmount
+                        : 0n
+                    channel.lastUpdate = new Date()
+                    channel.status = 'streaming'
+
+                    console.log(`📊 Updated channel ${channelId}:`)
+                    console.log(`   Employee balance: ${channel.employeeBalance}`)
+                    console.log(`   Employer balance: ${channel.employerBalance}`)
+
+                    this.notifyChannelUpdate(channel)
+                    break
+                }
+            }
+        }
+
+        // Refresh ledger balances after transfer
+        this.queryLedgerBalances()
+    }
+
+    /**
+     * Handle ledger balances update
+     */
+    private handleLedgerBalancesUpdate(payload: any): void {
+        console.log('📊 Processing ledger balances:', payload)
+
+        // payload could be { balances: [...] } or an array directly
+        const balances = payload?.balances || payload?.assets || payload || []
+
+        if (Array.isArray(balances)) {
+            for (const entry of balances) {
+                const asset = entry.asset || entry.token
+                const balance = entry.balance || entry.amount
+
+                if (asset === 'ytest.usd' || asset?.toLowerCase().includes('usd')) {
+                    try {
+                        const balValue = BigInt(balance || 0)
+                        console.log(`💰 Unified balance for ${asset}: ${balValue}`)
+                        this._currentBalance = balValue
+                        this.notifyBalanceUpdate(balValue)
+                    } catch (e) {
+                        console.error('Failed to parse balance:', e)
+                    }
+                }
+            }
         }
     }
 
@@ -443,9 +577,9 @@ class YellowService {
 
         console.log('✅ Channel created on-chain:', channel_id)
 
-        // Fund the channel with pending amount
-        const amount = this._pendingDepositAmount || 20n
-        await this.fundChannel(channel_id, amount)
+        // Capture funding amount before clearing pending state
+        const fundingAmount = this._pendingDepositAmount || 20n
+        console.log(`💰 Captured funding amount: ${fundingAmount}`)
 
         const employeeAddress = this._pendingCounterparty || channel.counterparty
 
@@ -458,6 +592,7 @@ class YellowService {
             employeeBalance: 0n,
             ratePerMinute: this._pendingRate || 750000n,
             status: 'open',
+            version: state && state.version ? BigInt(state.version) : 0n,
             createdAt: new Date(),
             lastUpdate: new Date(),
         }
@@ -506,7 +641,7 @@ class YellowService {
             }
 
             // Fund the channel
-            await this.fundChannel(channel_id, 20n)
+            await this.fundChannel(channel_id, fundingAmount)
 
         } catch (err) {
             console.error('❌ Error creating channel on-chain:', err)
@@ -587,11 +722,23 @@ class YellowService {
             // Update local channel state
             const channel = this.channels.get(channel_id)
             if (channel) {
-                channel.totalDeposit = resizeState.allocations.reduce(
+                // Calculate total deposited in channel
+                const totalFunded = resizeState.allocations.reduce(
                     (sum: bigint, a: any) => sum + BigInt(a.amount),
                     0n
                 )
+                channel.totalDeposit = totalFunded
+                // Set employer balance to the funded amount (employee starts at 0)
+                channel.employerBalance = totalFunded
+                channel.employeeBalance = 0n
                 channel.status = 'open'
+                channel.version = resizeState.version
+                channel.lastUpdate = new Date()
+
+                console.log(`📊 Channel ${channel_id} funded:`)
+                console.log(`   Total deposit: ${totalFunded}`)
+                console.log(`   Employer balance: ${channel.employerBalance}`)
+
                 this.notifyChannelUpdate(channel)
             }
 
@@ -602,27 +749,101 @@ class YellowService {
     }
 
     /**
-     * Close a channel and settle on-chain
+     * Send an off-chain payment transfer (for streaming)
+     * This transfers from the sender's unified balance to the recipient's unified balance
      */
-    async sendPayment(amount: bigint, recipient: string, token: string = YTEST_USD_TOKEN as string): Promise<void> {
+    async sendPayment(amount: bigint, recipient: string): Promise<void> {
         if (!this.sessionSigner || !this.ws) {
-            throw new Error('Not connected')
+            throw new Error('Not connected to Yellow Network')
         }
 
-        console.log(`💸 Streaming ${amount} to ${recipient}...`)
+        if (!this.isAuthenticated) {
+            throw new Error('Not authenticated with Yellow Network')
+        }
 
-        const transferMsg = await createTransferMessage(
-            this.sessionSigner,
-            {
-                destination: recipient as `0x${string}`,
-                allocations: [{
-                    asset: token,
-                    amount: amount.toString(),
-                }]
+        // Check if we have an open funded channel with this recipient
+        let targetChannel: PaymentChannel | undefined
+        for (const ch of this.channels.values()) {
+            if (ch.employee.toLowerCase() === recipient.toLowerCase() && ch.status === 'open' && ch.totalDeposit > 0n) {
+                targetChannel = ch
+                break
             }
-        )
+        }
 
-        this.ws.send(transferMsg)
+        if (targetChannel) {
+            console.log(`🔄 Sending payment via Channel Update (Channel ${targetChannel.id})`)
+            return this.sendChannelUpdate(targetChannel, amount)
+        }
+
+        console.log(`💸 Sending payment via Ledger Transfer (No funded channel found)`)
+
+        try {
+            // Use 'ytest.usd' symbol for the sandbox, not the token address
+            const transferMsg = await createTransferMessage(
+                this.sessionSigner,
+                {
+                    destination: recipient as `0x${string}`,
+                    allocations: [{
+                        asset: 'ytest.usd', // Use asset symbol, not address
+                        amount: amount.toString(),
+                    }]
+                }
+            )
+
+            this.ws.send(transferMsg)
+            console.log('📤 Transfer message sent')
+        } catch (err) {
+            console.error('❌ Failed to create/send transfer message:', err)
+            throw err
+        }
+    }
+
+    private async sendChannelUpdate(channel: PaymentChannel, amount: bigint): Promise<void> {
+        if (!this.sessionSigner || !this.ws) throw new Error('Not authenticated')
+
+        // Safety check
+        if (channel.employerBalance < amount) {
+            console.error(`❌ Insufficient channel balance. Has: ${channel.employerBalance}, Need: ${amount}`)
+            throw new Error('Insufficient channel balance')
+        }
+
+        const newEmployerBal = channel.employerBalance - amount
+        const newEmployeeBal = channel.employeeBalance + amount
+        const nextVersion = (channel.version || 0n) + 1n
+
+        console.log(`📊 Updating Channel ${channel.id} (v${channel.version}) -> v${nextVersion}: Emp ${newEmployerBal} | Wkr ${newEmployeeBal}`)
+
+        try {
+            const updateMsg = await createSubmitAppStateMessage(
+                this.sessionSigner,
+                {
+                    app_session_id: channel.id as `0x${string}`,
+                    version: Number(nextVersion),
+                    allocations: [
+                        {
+                            destination: channel.employer as `0x${string}`,
+                            amount: newEmployerBal.toString(),
+                            allocation_type: 0 // simple
+                        },
+                        {
+                            destination: channel.employee as `0x${string}`,
+                            amount: newEmployeeBal.toString(),
+                            allocation_type: 0
+                        }
+                    ],
+                } as any, // Cast to any to avoid complex TS generics
+                undefined, // requestId
+                undefined  // timestamp
+            )
+
+            console.log('📤 Sending Channel Update Message:', JSON.stringify(updateMsg, null, 2))
+            this.ws.send(updateMsg)
+            console.log('📤 Channel Update sent')
+
+        } catch (e) {
+            console.error('Failed to create channel update:', e)
+            throw e
+        }
     }
 
     async closeChannel(channelId: string, destination?: string): Promise<string | null> {

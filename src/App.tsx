@@ -3,10 +3,18 @@ import { Landing } from './pages/Landing'
 import { Employer } from './pages/Employer'
 import { Employee } from './pages/Employee'
 import { Header } from './components/Header'
-import { validateEnv } from './config/env'
+import { validateEnv, env } from './config/env'
+import { circleService } from './services/circle'
 
 // Validate environment on app load
 validateEnv()
+
+// Initialize Circle SDK globally to handle OAuth callbacks
+// The SDK must be initialized on every page load to catch OAuth redirects
+if (env.circleAppId) {
+    console.log('🔐 Initializing Circle SDK globally...')
+    circleService.init(env.circleAppId)
+}
 
 function App() {
     return (

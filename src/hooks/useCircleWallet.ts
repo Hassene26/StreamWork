@@ -1,103 +1,105 @@
+/**
+ * useCircleWallet Hook
+ * 
+ * Implements Circle social login flow based on official documentation:
+ * https://developers.circle.com/wallets/user-controlled/create-user-wallets-with-social-login
+ * 
+ * Flow:
+ * 1. Get deviceId from SDK
+ * 2. Create device token (backend)
+ * 3. Login with Google (SDK redirects, then callback fires with userToken)
+ * 4. Initialize user (backend → challengeId)
+ * 5. Execute challenge (SDK → creates wallet)
+ * 6. List wallets (get the created wallet)
+ */
+
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { circleService } from '../services/circle'
+import { circleService, getStoredLoginResult, clearStoredLoginResult, LoginResult } from '../services/circle'
 import { backendApi } from '../api/backend'
 import { env } from '../config/env'
 
-const STORAGE_KEY = 'streamwork_circle_session'
+const SESSION_KEY = 'streamwork_circle_session'
 
 interface CircleSession {
-    userId: string
     walletId: string
-    address: string
+    walletAddress: string
+    userToken: string
+    encryptionKey: string
 }
 
-interface TokenBalance {
-    token: {
-        symbol: string
-        name: string
-        decimals: number
-    }
-    amount: string
+interface Wallet {
+    id: string
+    address: string
+    blockchain: string
 }
 
 interface UseCircleWalletReturn {
-    userId: string | null
+    // State
     walletId: string | null
     address: string | null
     balance: string
     isLoading: boolean
     isRestoring: boolean
     error: string | null
+    status: string
     isConnected: boolean
-    init: (appId: string) => void
+
+    // Actions
     login: () => Promise<void>
     logout: () => void
     refreshBalance: () => Promise<void>
 }
 
 function saveSession(session: CircleSession): void {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(session))
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session))
 }
 
 function loadSession(): CircleSession | null {
-    const data = localStorage.getItem(STORAGE_KEY)
-    if (!data) return null
     try {
-        return JSON.parse(data)
+        const data = localStorage.getItem(SESSION_KEY)
+        return data ? JSON.parse(data) : null
     } catch {
         return null
     }
 }
 
 function clearSession(): void {
-    localStorage.removeItem(STORAGE_KEY)
+    localStorage.removeItem(SESSION_KEY)
 }
 
 export function useCircleWallet(): UseCircleWalletReturn {
-    const [userId, setUserId] = useState<string | null>(null)
     const [walletId, setWalletId] = useState<string | null>(null)
     const [address, setAddress] = useState<string | null>(null)
     const [balance, setBalance] = useState<string>('0.00')
     const [isLoading, setIsLoading] = useState(false)
     const [isRestoring, setIsRestoring] = useState(true)
     const [error, setError] = useState<string | null>(null)
+    const [status, setStatus] = useState<string>('Ready')
+
+    // Pre-fetched device credentials
+    const deviceIdRef = useRef<string | null>(null)
+    const deviceTokenRef = useRef<string | null>(null)
+    const deviceEncryptionKeyRef = useRef<string | null>(null)
 
     const isConnected = !!walletId && !!address
 
-    // Pre-fetched device credentials (to avoid async gap on login click)
-    const prefetchedDeviceToken = useRef<string | null>(null)
-    const prefetchedDeviceEncryptionKey = useRef<string | null>(null)
-
-    const init = useCallback((appId: string) => {
+    // Fetch balance for a wallet
+    const fetchBalance = useCallback(async (wId: string, userToken?: string) => {
         try {
-            circleService.init(appId)
-            console.log('Circle SDK initialized with App ID:', appId)
-        } catch (err) {
-            console.error('Failed to init Circle SDK:', err)
-            setError('Failed to initialize Circle SDK')
-        }
-    }, [])
+            const response = await backendApi.getWalletBalance(wId, userToken)
+            const balances = response.tokenBalances || []
 
-    // Fetch balance for a wallet (balance fetching is best-effort)
-    const fetchBalance = useCallback(async (wId: string, token?: string) => {
-        try {
-            const response = await backendApi.getWalletBalance(wId, token)
-            const balances: TokenBalance[] = response.tokenBalances || []
-
-            // Find USDC balance (or first stablecoin)
-            const usdcBalance = balances.find(
-                (b) => b.token.symbol === 'USDC' || b.token.symbol === 'USDT'
+            const usdcBalance = balances.find((b: any) =>
+                b.token?.symbol?.startsWith('USDC') || b.token?.name?.includes('USDC')
             )
 
             if (usdcBalance) {
-                // Format with proper decimals
                 const decimals = usdcBalance.token.decimals || 6
                 const amount = parseFloat(usdcBalance.amount) / Math.pow(10, decimals)
                 setBalance(amount.toFixed(2))
             } else if (balances.length > 0) {
-                // Use first available balance
                 const first = balances[0]
-                const decimals = first.token.decimals || 18
+                const decimals = first.token?.decimals || 18
                 const amount = parseFloat(first.amount) / Math.pow(10, decimals)
                 setBalance(amount.toFixed(2))
             } else {
@@ -105,183 +107,257 @@ export function useCircleWallet(): UseCircleWalletReturn {
             }
         } catch (err) {
             console.warn('Failed to fetch balance:', err)
-            // Don't fail - balance fetch is non-critical, show 0
             setBalance('0.00')
         }
     }, [])
 
     const refreshBalance = useCallback(async () => {
         if (walletId) {
-            await fetchBalance(walletId)
+            const session = loadSession()
+            await fetchBalance(walletId, session?.userToken)
         }
     }, [walletId, fetchBalance])
 
-    // Restore session on mount
-    useEffect(() => {
-        const restoreSession = async () => {
-            // Initialize SDK first
-            if (env.circleAppId && !circleService['isInitialized']) {
-                try {
-                    circleService.init(env.circleAppId)
-                } catch (e) {
-                    console.warn('SDK Init Warning:', e)
-                }
-            }
+    // Load wallets and complete the connection
+    const loadWallets = useCallback(async (userToken: string, encryptionKey: string) => {
+        setStatus('Loading wallet details...')
 
-            // Try to restore saved session
-            const session = loadSession()
-            if (session) {
-                console.log('Restoring Circle session...')
-                try {
-                    // Verify session is still valid by checking wallets
-                    const walletResponse = await backendApi.getWallets(session.userId)
-
-                    if (walletResponse.wallets && walletResponse.wallets.length > 0) {
-                        const wallet = walletResponse.wallets.find(
-                            (w: any) => w.id === session.walletId
-                        ) || walletResponse.wallets[0]
-
-                        setUserId(session.userId)
-                        setWalletId(wallet.id)
-                        setAddress(wallet.address)
-
-                        // Fetch balance
-                        await fetchBalance(wallet.id)
-                        console.log('Session restored successfully')
-                    } else {
-                        // Session invalid, clear it
-                        clearSession()
-                    }
-                } catch (err) {
-                    console.warn('Failed to restore session:', err)
-                    clearSession()
-                }
-            }
-            setIsRestoring(false)
-        }
-
-        restoreSession()
-    }, [fetchBalance])
-
-    // Pre-fetch device token so login popup opens without async delay
-    useEffect(() => {
-        if (isConnected) return
-
-        const prefetch = async () => {
-            try {
-                const deviceId = crypto.randomUUID()
-                const deviceResponse = await backendApi.getDeviceToken(deviceId)
-                const { deviceToken, deviceEncryptionKey } = deviceResponse.data || deviceResponse
-                prefetchedDeviceToken.current = deviceToken
-                prefetchedDeviceEncryptionKey.current = deviceEncryptionKey
-                console.log('Device token pre-fetched successfully')
-            } catch (err) {
-                console.warn('Failed to pre-fetch device token:', err)
-            }
-        }
-
-        prefetch()
-    }, [isConnected])
-
-    const login = useCallback(async () => {
-        setIsLoading(true)
-        setError(null)
         try {
-            // 1. Get device credentials (pre-fetched or inline fallback)
-            let deviceToken: string
-            let deviceEncryptionKey: string
+            const response = await backendApi.listWalletsByToken(userToken)
+            const wallets: Wallet[] = response.wallets || []
 
-            if (prefetchedDeviceToken.current && prefetchedDeviceEncryptionKey.current) {
-                // Fast path: use pre-fetched credentials (no async gap before popup)
-                console.log('Using pre-fetched device token for immediate popup')
-                deviceToken = prefetchedDeviceToken.current
-                deviceEncryptionKey = prefetchedDeviceEncryptionKey.current
-                prefetchedDeviceToken.current = null
-                prefetchedDeviceEncryptionKey.current = null
-            } else {
-                // Fallback: fetch inline (popup may be blocked by browser)
-                console.warn('No pre-fetched device token, fetching inline (popup may be blocked)')
-                const deviceId = crypto.randomUUID()
-                const deviceResponse = await backendApi.getDeviceToken(deviceId)
-                const resp = deviceResponse.data || deviceResponse
-                deviceToken = resp.deviceToken
-                deviceEncryptionKey = resp.deviceEncryptionKey
-            }
-
-            // 2. Perform Social Login (SDK handles Google Popup)
-            console.log('Launching Circle Social Login...')
-            const authResult = await circleService.performLogin(deviceToken, deviceEncryptionKey)
-            const newUserId = authResult.userId
-            console.log('Social Login Success, User ID:', newUserId)
-
-            // 4. Check for existing wallets
-            let walletResponse = await backendApi.getWallets(newUserId)
-
-            // 5. If no wallet, initialize one
-            if (!walletResponse.wallets || walletResponse.wallets.length === 0) {
-                console.log('No wallet found, initializing...')
-                const { challengeId } = await backendApi.initWallet(newUserId)
-                if (challengeId) {
-                    await circleService.execute(
-                        authResult.userToken,
-                        authResult.encryptionKey,
-                        challengeId
-                    )
-                    // Wait for creation
-                    await new Promise((r) => setTimeout(r, 2000))
-                    walletResponse = await backendApi.getWallets(newUserId)
-                }
-            }
-
-            if (walletResponse.wallets && walletResponse.wallets.length > 0) {
-                const wallet = walletResponse.wallets[0]
+            if (wallets.length > 0) {
+                const wallet = wallets[0]
 
                 // Save session
                 saveSession({
-                    userId: newUserId,
                     walletId: wallet.id,
-                    address: wallet.address,
+                    walletAddress: wallet.address,
+                    userToken,
+                    encryptionKey,
                 })
 
-                setUserId(newUserId)
                 setWalletId(wallet.id)
                 setAddress(wallet.address)
 
                 // Fetch balance
-                await fetchBalance(wallet.id)
+                await fetchBalance(wallet.id, userToken)
 
-                console.log('Wallet Connected:', wallet)
+                // Clean up
+                circleService.clearCookies()
+                clearStoredLoginResult()
+
+                setStatus('Wallet connected! 🎉')
+                console.log('✅ Circle wallet connected:', wallet.address)
             } else {
-                throw new Error('Wallet creation failed or pending')
+                setStatus('No wallets found')
+                setError('No wallets found for this user')
             }
         } catch (err: any) {
-            console.error('Login failed:', err)
-            setError(err.message || 'Failed to login')
-        } finally {
-            setIsLoading(false)
+            console.error('Failed to load wallets:', err)
+            setError(err.message || 'Failed to load wallets')
+            setStatus('Failed to load wallets')
         }
     }, [fetchBalance])
 
+    // Initialize user and create wallet
+    const initializeAndCreateWallet = useCallback(async (loginResult: LoginResult) => {
+        const { userToken, encryptionKey } = loginResult
+
+        try {
+            setStatus('Initializing user...')
+            console.log('🔐 Initializing user with userToken...')
+
+            const initResponse = await backendApi.initializeUser(userToken)
+
+            // Code 155106 = user already initialized
+            if (initResponse.code === 155106 || initResponse.status === 409) {
+                console.log('ℹ️ User already initialized, loading existing wallets...')
+                await loadWallets(userToken, encryptionKey)
+                return
+            }
+
+            const challengeId = initResponse.challengeId
+            if (!challengeId) {
+                throw new Error('No challengeId returned from initialization')
+            }
+
+            console.log('🔐 Got challengeId:', challengeId)
+            setStatus('Creating wallet...')
+
+            // Set authentication and execute challenge
+            circleService.setAuthentication(userToken, encryptionKey)
+
+            circleService.execute(challengeId, async (error: any) => {
+                if (error) {
+                    console.error('❌ Challenge execution failed:', error)
+                    setError(error?.message || 'Failed to create wallet')
+                    setStatus('Wallet creation failed')
+                    setIsLoading(false)
+                    return
+                }
+
+                console.log('✅ Challenge executed, wallet created!')
+                setStatus('Wallet created! Loading details...')
+
+                // Wait a bit for Circle to index the wallet
+                await new Promise(r => setTimeout(r, 2000))
+
+                // Load the created wallet
+                await loadWallets(userToken, encryptionKey)
+                setIsLoading(false)
+            })
+        } catch (err: any) {
+            console.error('Failed to initialize user:', err)
+            setError(err.message || 'Failed to initialize user')
+            setStatus('Initialization failed')
+            setIsLoading(false)
+        }
+    }, [loadWallets])
+
+    // Handle OAuth callback result
+    const handleLoginComplete = useCallback((error: any, result: any) => {
+        if (error) {
+            console.error('❌ Login failed:', error)
+            setError(error.message || 'Login failed')
+            setStatus('Login failed')
+            setIsLoading(false)
+            return
+        }
+
+        if (result) {
+            console.log('✅ Login successful, got credentials')
+            setStatus('Login successful! Creating wallet...')
+
+            // Continue with wallet creation
+            initializeAndCreateWallet({
+                userToken: result.userToken,
+                encryptionKey: result.encryptionKey,
+            })
+        }
+    }, [initializeAndCreateWallet])
+
+    // Initialize SDK and check for OAuth callback on mount
+    useEffect(() => {
+        const init = async () => {
+            // Initialize Circle SDK
+            if (env.circleAppId && !circleService.ready) {
+                circleService.init(env.circleAppId, handleLoginComplete)
+            }
+
+            // Check for OAuth callback result (from redirect)
+            const storedResult = getStoredLoginResult()
+            if (storedResult) {
+                console.log('🔐 Found stored login result from OAuth redirect')
+                setIsLoading(true)
+                await initializeAndCreateWallet(storedResult)
+                setIsRestoring(false)
+                return
+            }
+
+            // Try to restore existing session
+            const session = loadSession()
+            if (session) {
+                console.log('🔐 Restoring saved session...')
+                setWalletId(session.walletId)
+                setAddress(session.walletAddress)
+                await fetchBalance(session.walletId, session.userToken)
+                setStatus('Session restored')
+            }
+
+            // Pre-fetch device credentials for faster login
+            try {
+                if (circleService.ready && !deviceIdRef.current) {
+                    const deviceId = await circleService.getDeviceId()
+                    deviceIdRef.current = deviceId
+                    localStorage.setItem('circle_deviceId', deviceId)
+
+                    const { deviceToken, deviceEncryptionKey } = await backendApi.getDeviceToken(deviceId)
+                    deviceTokenRef.current = deviceToken
+                    deviceEncryptionKeyRef.current = deviceEncryptionKey
+                    console.log('✅ Device token pre-fetched')
+                }
+            } catch (err) {
+                console.warn('Failed to pre-fetch device token:', err)
+            }
+
+            setIsRestoring(false)
+        }
+
+        init()
+    }, [handleLoginComplete, initializeAndCreateWallet, fetchBalance])
+
+    // Login function
+    const login = useCallback(async () => {
+        setIsLoading(true)
+        setError(null)
+        setStatus('Preparing login...')
+
+        try {
+            // Get or use cached device credentials
+            let deviceToken = deviceTokenRef.current
+            let deviceEncryptionKey = deviceEncryptionKeyRef.current
+
+            if (!deviceToken || !deviceEncryptionKey) {
+                setStatus('Creating device token...')
+
+                let deviceId = deviceIdRef.current || localStorage.getItem('circle_deviceId')
+                if (!deviceId && circleService.ready) {
+                    deviceId = await circleService.getDeviceId()
+                    deviceIdRef.current = deviceId
+                    localStorage.setItem('circle_deviceId', deviceId)
+                }
+
+                if (!deviceId) {
+                    throw new Error('Could not get device ID')
+                }
+
+                const response = await backendApi.getDeviceToken(deviceId)
+                deviceToken = response.deviceToken
+                deviceEncryptionKey = response.deviceEncryptionKey
+
+                deviceTokenRef.current = deviceToken
+                deviceEncryptionKeyRef.current = deviceEncryptionKey
+            }
+
+            setStatus('Redirecting to Google...')
+
+            // This will redirect to Google OAuth
+            circleService.performLogin(deviceToken!, deviceEncryptionKey!)
+
+            // Note: Page will redirect, so we don't continue here
+        } catch (err: any) {
+            console.error('Login error:', err)
+            setError(err.message || 'Login failed')
+            setStatus('Login failed')
+            setIsLoading(false)
+        }
+    }, [])
+
+    // Logout function
     const logout = useCallback(() => {
         clearSession()
-        setUserId(null)
+        circleService.clearCookies()
+        clearStoredLoginResult()
+
         setWalletId(null)
         setAddress(null)
         setBalance('0.00')
         setError(null)
-        console.log('Logged out from Circle')
+        setStatus('Logged out')
+
+        console.log('🔐 Circle wallet disconnected')
     }, [])
 
     return {
-        userId,
         walletId,
         address,
         balance,
         isLoading,
         isRestoring,
         error,
+        status,
         isConnected,
-        init,
         login,
         logout,
         refreshBalance,

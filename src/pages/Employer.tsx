@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useAccount } from 'wagmi'
 import { ConnectButton } from '../components/ConnectButton'
 import { useYellowChannel } from '../hooks/useYellowChannel'
@@ -71,12 +71,35 @@ export function Employer() {
         })
     }, [channels, pausedEmployees])
 
+    // Keep a ref of employees for the interval to access without resetting
+    const employeesRef = useRef<EmployeeDisplay[]>([])
+    useEffect(() => {
+        employeesRef.current = employees
+    }, [employees])
+
     // Off-chain streaming loop
     useEffect(() => {
-        if (!yellowConnected) return
+        if (!yellowConnected) {
+            console.log('⏳ Streaming loop waiting for Yellow connection...')
+            return
+        }
 
-        const interval = setInterval(async () => {
-            const activeEmployees = employees.filter(e => e.status === 'active' && !e.id.startsWith('demo_'))
+        console.log('✅ Streaming loop initialized (Connected)')
+
+        // Use a ref for the interval ID to ensure cleanup
+        const intervalId = setInterval(async () => {
+            const currentEmployees = employeesRef.current
+            const activeEmployees = currentEmployees.filter(e => e.status === 'active' && !e.id.startsWith('demo_'))
+
+            console.log('🔄 Streaming Loop Tick:', {
+                total: currentEmployees.length,
+                active: activeEmployees.length,
+                connected: yellowConnected
+            })
+
+            if (activeEmployees.length === 0 && currentEmployees.length > 0) {
+                // console.log('⚠️ No active employees found...')
+            }
 
             for (const emp of activeEmployees) {
                 try {
@@ -89,6 +112,8 @@ export function Employer() {
                     if (amountUnits > 0n) {
                         console.log(`Streaming ${amountUnits} units to ${emp.name}`)
                         await sendPayment(amountUnits, emp.address)
+                    } else {
+                        // console.log(`⚠️ Amount too small for ${emp.name}: ${amountUSDC}`)
                     }
                 } catch (err) {
                     console.error('Streaming failed for', emp.name, err)
@@ -96,8 +121,9 @@ export function Employer() {
             }
         }, 5000)
 
-        return () => clearInterval(interval)
-    }, [employees, yellowConnected, sendPayment])
+        // Only cleanup when component unmounts or connection is lost
+        return () => clearInterval(intervalId)
+    }, [yellowConnected, sendPayment])
 
     const handleAddEmployee = async () => {
         console.log("calling handleAddEmployee")
@@ -111,6 +137,8 @@ export function Employer() {
             // Convert to 6 decimals
             const depositUnits = BigInt(Math.floor(Number(depositAmount) * 1_000_000))
             const rateUnits = BigInt(Math.floor(Number(ratePerMinute) * 1_000_000))
+
+            console.log(`Open Channel: Input=${depositAmount}, Units=${depositUnits}`)
 
             // Create channel via Yellow SDK using resolved address
             await createChannel(resolvedAddress, depositUnits, rateUnits)
