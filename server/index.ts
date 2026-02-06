@@ -219,126 +219,48 @@ app.post('/api/wallets/balance', async (req, res) => {
         res.json(response.data);
     } catch (error: any) {
         console.error('Get Balance Error:', error?.response?.data || error.message);
-        // Return empty balance on error (non-critical)
-        res.json({ tokenBalances: [] });
+        res.status(500).json({ error: 'Failed to fetch balance', details: error?.response?.data });
     }
 });
 
 // ============================================
-// CIRCLE MINT WITHDRAWAL ENDPOINTS
-// These use the businessAccount API for withdrawals
+// USER-CONTROLLED WALLET TRANSFER ENDPOINTS
+// These use the challenge-based flow for user wallets
 // ============================================
 
-// 7. Add Recipient Address (for blockchain withdrawal)
-// POST /api/withdraw/add-recipient
-app.post('/api/withdraw/add-recipient', async (req, res) => {
+// 7. Create Transfer Challenge (for wallet-to-wallet withdrawal)
+// The frontend must execute the returned challengeId via the Circle SDK
+app.post('/api/withdraw/create-transfer', async (req, res) => {
     try {
-        const { chain, address, currency, description } = req.body;
+        const { userToken, walletId, destinationAddress, amount, tokenId } = req.body;
 
-        if (!chain || !address) {
-            return res.status(400).json({ error: 'Missing chain or address' });
+        if (!userToken || !walletId || !destinationAddress || !amount || !tokenId) {
+            return res.status(400).json({
+                error: 'Missing required fields',
+                required: ['userToken', 'walletId', 'destinationAddress', 'amount', 'tokenId']
+            });
         }
 
-        const response = await fetch('https://api-sandbox.circle.com/v1/businessAccount/wallets/addresses/recipient', {
-            method: 'POST',
-            headers: {
-                'Accept': 'application/json',
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify({
-                chain: chain || 'ETH',
-                address,
-                currency: currency || 'USD',
-                description: description || 'StreamWork Withdrawal',
-                idempotencyKey: uuidv4(),
-            }),
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-            console.error('Add Recipient Error:', data);
-            return res.status(response.status).json(data);
-        }
-
-        // Returns: { id, address, chain, currency }
-        res.json(data.data);
-    } catch (error: any) {
-        console.error('Add Recipient Error:', error?.message);
-        res.status(500).json({ error: 'Failed to add recipient address' });
-    }
-});
-
-// 8. Withdraw to Blockchain Wallet
-// POST /api/withdraw/to-wallet
-app.post('/api/withdraw/to-wallet', async (req, res) => {
-    try {
-        const { addressId, amount, currency } = req.body;
-
-        if (!addressId || !amount) {
-            return res.status(400).json({ error: 'Missing addressId or amount' });
-        }
-
-        const response = await fetch('https://api-sandbox.circle.com/v1/businessAccount/transfers', {
-            method: 'POST',
-            headers: {
-                'Accept': 'application/json',
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify({
-                destination: {
-                    type: 'verified_blockchain',
-                    addressId,
+        const response = await circleClient.createTransaction({
+            userToken,
+            walletId,
+            destinationAddress,
+            amounts: [amount.toString()],
+            tokenId,
+            fee: {
+                type: 'level',
+                config: {
+                    feeLevel: 'MEDIUM',
                 },
-                amount: {
-                    currency: currency || 'USD',
-                    amount: amount.toString(),
-                },
-                idempotencyKey: uuidv4(),
-            }),
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-            console.error('Withdraw to Wallet Error:', data);
-            return res.status(response.status).json(data);
-        }
-
-        // Returns: { id, status, transactionHash, ... }
-        res.json(data.data);
-    } catch (error: any) {
-        console.error('Withdraw to Wallet Error:', error?.message);
-        res.status(500).json({ error: 'Failed to withdraw to wallet' });
-    }
-});
-
-// 9. Get Transfer Status
-// GET /api/withdraw/status/:transferId
-app.get('/api/withdraw/status/:transferId', async (req, res) => {
-    try {
-        const { transferId } = req.params;
-
-        const response = await fetch(`https://api-sandbox.circle.com/v1/businessAccount/transfers/${transferId}`, {
-            method: 'GET',
-            headers: {
-                'Accept': 'application/json',
-                'Authorization': `Bearer ${apiKey}`,
             },
         });
 
-        const data = await response.json();
-
-        if (!response.ok) {
-            return res.status(response.status).json(data);
-        }
-
-        res.json(data.data);
+        console.log('Transfer challenge created:', response.data);
+        // Returns: { challengeId: '...' }
+        res.json(response.data);
     } catch (error: any) {
-        console.error('Get Transfer Status Error:', error?.message);
-        res.status(500).json({ error: 'Failed to get transfer status' });
+        console.error('Create Transfer Error:', error?.response?.data || error.message);
+        res.status(500).json({ error: 'Failed to create transfer', details: error?.response?.data });
     }
 });
 

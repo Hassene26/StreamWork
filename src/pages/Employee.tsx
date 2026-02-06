@@ -12,6 +12,7 @@ export function Employee() {
         login,
         logout: circleLogout,
         refreshBalance,
+        withdrawToWallet,
         isLoading: isCircleLoading,
         isRestoring: isCircleRestoring,
         isConnected: isCircleConnected,
@@ -52,55 +53,15 @@ export function Employee() {
         setIsBridgeModalOpen(true)
     }
 
-    const handleWithdrawToWallet = async (chain: string, destinationAddress: string, amount: string) => {
+    const handleWithdrawToWallet = async (_chain: string, destinationAddress: string, amount: string) => {
         if (!circleAddress) throw new Error('No wallet connected')
 
-        console.log('Withdrawing', amount, 'to', destinationAddress, 'on', chain)
-        setTxStatus({ type: 'info', message: 'Registering destination address...' })
+        console.log('Withdrawing', amount, 'to', destinationAddress)
+        setTxStatus({ type: 'info', message: 'Creating transfer...' })
 
         try {
-            // Step 1: Add recipient address
-            const recipientResponse = await fetch('http://localhost:3000/api/withdraw/add-recipient', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    chain,
-                    address: destinationAddress,
-                    currency: 'USD',
-                    description: 'StreamWork Withdrawal'
-                })
-            })
-
-            if (!recipientResponse.ok) {
-                const error = await recipientResponse.json()
-                throw new Error(error.message || 'Failed to register address')
-            }
-
-            const recipient = await recipientResponse.json()
-            console.log('Recipient registered:', recipient)
-
-            setTxStatus({ type: 'info', message: 'Initiating transfer...' })
-
-            // Step 2: Create transfer
-            const transferResponse = await fetch('http://localhost:3000/api/withdraw/to-wallet', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    addressId: recipient.id,
-                    amount: amount,
-                    currency: 'USD'
-                })
-            })
-
-            if (!transferResponse.ok) {
-                const error = await transferResponse.json()
-                throw new Error(error.message || 'Failed to create transfer')
-            }
-
-            const transfer = await transferResponse.json()
-            console.log('Transfer created:', transfer)
-
-            setTxStatus({ type: 'success', message: `Withdrawal submitted! Transaction ID: ${transfer.id}` })
+            await withdrawToWallet(destinationAddress, amount)
+            setTxStatus({ type: 'success', message: 'Withdrawal submitted! Check your wallet in a few minutes.' })
             setTimeout(() => refreshBalance(), 5000)
         } catch (err: any) {
             console.error('Withdrawal error:', err)

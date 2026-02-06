@@ -124,6 +124,29 @@ export const backendApi = {
         })
         if (!response.ok) throw new Error('Failed to get balance')
         return response.json()
+    },
+
+    /**
+     * Create Transfer Challenge (for user-controlled wallet withdrawals)
+     * Returns: { challengeId } - must be executed via Circle SDK on frontend
+     */
+    createTransferChallenge: async (params: {
+        userToken: string
+        walletId: string
+        destinationAddress: string
+        amount: string
+        tokenId: string
+    }) => {
+        const response = await fetch(`${API_URL}/withdraw/create-transfer`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(params)
+        })
+        if (!response.ok) {
+            const error = await response.json()
+            throw new Error(error.error || 'Failed to create transfer')
+        }
+        return response.json()
     }
 }
 

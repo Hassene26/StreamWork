@@ -38,6 +38,7 @@ interface UseCircleWalletReturn {
     walletId: string | null
     address: string | null
     balance: string
+    tokenId: string | null
     isLoading: boolean
     isRestoring: boolean
     error: string | null
@@ -48,6 +49,7 @@ interface UseCircleWalletReturn {
     login: () => Promise<void>
     logout: () => void
     refreshBalance: () => Promise<void>
+    withdrawToWallet: (destinationAddress: string, amount: string) => Promise<void>
 }
 
 function saveSession(session: CircleSession): void {
@@ -71,6 +73,7 @@ export function useCircleWallet(): UseCircleWalletReturn {
     const [walletId, setWalletId] = useState<string | null>(null)
     const [address, setAddress] = useState<string | null>(null)
     const [balance, setBalance] = useState<string>('0.00')
+    const [tokenId, setTokenId] = useState<string | null>(null)
     const [isLoading, setIsLoading] = useState(false)
     const [isRestoring, setIsRestoring] = useState(true)
     const [error, setError] = useState<string | null>(null)
@@ -94,20 +97,20 @@ export function useCircleWallet(): UseCircleWalletReturn {
             )
 
             if (usdcBalance) {
-                const decimals = usdcBalance.token.decimals || 6
-                const amount = parseFloat(usdcBalance.amount) / Math.pow(10, decimals)
+                const amount = parseFloat(usdcBalance.amount)
                 setBalance(amount.toFixed(2))
+                if (usdcBalance.token?.id) setTokenId(usdcBalance.token.id)
             } else if (balances.length > 0) {
                 const first = balances[0]
-                const decimals = first.token?.decimals || 18
-                const amount = parseFloat(first.amount) / Math.pow(10, decimals)
+                const amount = parseFloat(first.amount)
                 setBalance(amount.toFixed(2))
+                if (first.token?.id) setTokenId(first.token.id)
             } else {
                 setBalance('0.00')
             }
         } catch (err) {
             console.warn('Failed to fetch balance:', err)
-            setBalance('0.00')
+            // Don't overwrite a previously known balance on transient errors
         }
     }, [])
 
@@ -334,6 +337,42 @@ export function useCircleWallet(): UseCircleWalletReturn {
         }
     }, [])
 
+    // Withdraw to external wallet via challenge flow
+    const withdrawToWallet = useCallback(async (destinationAddress: string, amount: string) => {
+        const session = loadSession()
+        if (!session || !walletId || !tokenId) {
+            throw new Error('Wallet not connected or token not found')
+        }
+
+        // Step 1: Create transfer challenge on backend
+        const response = await backendApi.createTransferChallenge({
+            userToken: session.userToken,
+            walletId: session.walletId,
+            destinationAddress,
+            amount,
+            tokenId,
+        })
+
+        const challengeId = response.challengeId
+        if (!challengeId) {
+            throw new Error('No challengeId returned from server')
+        }
+
+        // Step 2: Execute challenge via Circle SDK (user approves the transaction)
+        return new Promise<void>((resolve, reject) => {
+            circleService.setAuthentication(session.userToken, session.encryptionKey)
+            circleService.execute(challengeId, (error: any) => {
+                if (error) {
+                    console.error('Transfer challenge failed:', error)
+                    reject(new Error(error?.message || 'Transfer failed'))
+                    return
+                }
+                console.log('Transfer challenge executed successfully')
+                resolve()
+            })
+        })
+    }, [walletId, tokenId])
+
     // Logout function
     const logout = useCallback(() => {
         clearSession()
@@ -353,6 +392,7 @@ export function useCircleWallet(): UseCircleWalletReturn {
         walletId,
         address,
         balance,
+        tokenId,
         isLoading,
         isRestoring,
         error,
@@ -361,5 +401,6 @@ export function useCircleWallet(): UseCircleWalletReturn {
         login,
         logout,
         refreshBalance,
+        withdrawToWallet,
     }
 }
