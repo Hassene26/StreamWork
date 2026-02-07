@@ -1,9 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { useCircleWallet } from '../hooks/useCircleWallet'
 import { useENSProfile } from '../hooks/useENS'
-import { BridgeModal } from '../components/BridgeModal'
+import { resolveENSName, isENSName } from '../services/ens'
 import { backendApi } from '../api/backend'
+import { BridgeModal } from '../components/BridgeModal'
 import './Employee.css'
+
+const ENS_LINK_KEY = 'streamwork_linked_ens'
+function getLinkedENS(): string | null { return localStorage.getItem(ENS_LINK_KEY) }
+function setLinkedENSStorage(name: string): void { localStorage.setItem(ENS_LINK_KEY, name) }
+function clearLinkedENSStorage(): void { localStorage.removeItem(ENS_LINK_KEY) }
 
 export function Employee() {
     const {
@@ -20,8 +26,25 @@ export function Employee() {
         status: circleStatus,
     } = useCircleWallet()
 
-    // ENS Profile lookup (using Circle address)
-    const { profile: ensProfile, isLoading: isLoadingENS } = useENSProfile(circleAddress || null)
+    // ENS linking
+    const [linkedEns, setLinkedEns] = useState<string | null>(getLinkedENS())
+    const [ensInput, setEnsInput] = useState('')
+    const [isLinkingEns, setIsLinkingEns] = useState(false)
+    const [ensLinkError, setEnsLinkError] = useState<string | null>(null)
+
+    // ENS registration
+    const [ensRegInput, setEnsRegInput] = useState('')
+    const [ensAvailability, setEnsAvailability] = useState<{ available: boolean; price: string } | null>(null)
+    const [isCheckingAvailability, setIsCheckingAvailability] = useState(false)
+    const [ensRegStatus, setEnsRegStatus] = useState<'idle' | 'committing' | 'waiting' | 'registering' | 'complete' | 'error'>('idle')
+    const [ensRegError, setEnsRegError] = useState<string | null>(null)
+    const [ensCountdown, setEnsCountdown] = useState(0)
+    const [showLinkExisting, setShowLinkExisting] = useState(false)
+    const availabilityTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+    // ENS Profile lookup (prefer linked ENS over Circle address)
+    const { profile: ensProfile, isLoading: isLoadingENS } = useENSProfile(linkedEns || circleAddress || null)
 
     // Transaction status tracking
     const [txStatus, setTxStatus] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null)
@@ -36,14 +59,152 @@ export function Employee() {
         }
     }, [txStatus])
 
-    // Copy address to clipboard
+    // Copy address/ENS to clipboard
     const copyAddress = async () => {
-        if (circleAddress) {
-            await navigator.clipboard.writeText(circleAddress)
+        const textToCopy = linkedEns || circleAddress
+        if (textToCopy) {
+            await navigator.clipboard.writeText(textToCopy)
             setCopiedAddress(true)
             setTimeout(() => setCopiedAddress(false), 2000)
         }
     }
+
+    const handleLinkENS = async () => {
+        if (!ensInput) return
+        setIsLinkingEns(true)
+        setEnsLinkError(null)
+
+        try {
+            if (!isENSName(ensInput)) {
+                setEnsLinkError('Please enter a valid ENS name (e.g. name.eth)')
+                return
+            }
+
+            const resolved = await resolveENSName(ensInput)
+            if (!resolved) {
+                setEnsLinkError('ENS name could not be resolved')
+                return
+            }
+
+            setLinkedENSStorage(ensInput)
+            setLinkedEns(ensInput)
+            setEnsInput('')
+        } catch {
+            setEnsLinkError('Failed to verify ENS name')
+        } finally {
+            setIsLinkingEns(false)
+        }
+    }
+
+    const handleUnlinkENS = () => {
+        clearLinkedENSStorage()
+        setLinkedEns(null)
+    }
+
+    // Debounced availability check
+    const checkAvailability = useCallback((label: string) => {
+        if (availabilityTimer.current) clearTimeout(availabilityTimer.current)
+        setEnsAvailability(null)
+        setEnsRegError(null)
+
+        if (!label || label.length < 3) {
+            setIsCheckingAvailability(false)
+            return
+        }
+
+        setIsCheckingAvailability(true)
+        availabilityTimer.current = setTimeout(async () => {
+            try {
+                const result = await backendApi.checkENSAvailability(label)
+                const priceWei = BigInt(result.price.base) + BigInt(result.price.premium)
+                const priceEth = Number(priceWei) / 1e18
+                setEnsAvailability({
+                    available: result.available,
+                    price: priceEth.toFixed(6),
+                })
+            } catch (err: any) {
+                setEnsRegError(err.message || 'Failed to check availability')
+            } finally {
+                setIsCheckingAvailability(false)
+            }
+        }, 500)
+    }, [])
+
+    const handleEnsRegInputChange = (value: string) => {
+        // Only allow lowercase alphanumeric and hyphens
+        const cleaned = value.toLowerCase().replace(/[^a-z0-9-]/g, '')
+        setEnsRegInput(cleaned)
+        setEnsRegStatus('idle')
+        checkAvailability(cleaned)
+    }
+
+    const handleRegisterENS = async () => {
+        if (!ensRegInput || !circleAddress || !ensAvailability?.available) return
+
+        setEnsRegError(null)
+        setEnsRegStatus('committing')
+
+        try {
+            const { jobId } = await backendApi.registerENS(ensRegInput, circleAddress)
+
+            // Poll for status
+            const poll = async () => {
+                try {
+                    const status = await backendApi.getENSRegistrationStatus(jobId)
+                    setEnsRegStatus(status.status)
+
+                    if (status.status === 'waiting') {
+                        setEnsCountdown(prev => prev > 0 ? prev - 1 : 65)
+                    }
+
+                    if (status.status === 'complete') {
+                        // Auto-link the newly registered name
+                        const fullName = `${ensRegInput}.eth`
+                        setLinkedENSStorage(fullName)
+                        setLinkedEns(fullName)
+                        setEnsRegInput('')
+                        setEnsAvailability(null)
+                        return // Stop polling
+                    }
+
+                    if (status.status === 'error') {
+                        setEnsRegError(status.error || 'Registration failed')
+                        return // Stop polling
+                    }
+
+                    // Continue polling
+                    pollTimer.current = setTimeout(poll, 2000)
+                } catch (err: any) {
+                    setEnsRegError(err.message || 'Failed to check status')
+                    setEnsRegStatus('error')
+                }
+            }
+
+            // Start countdown
+            setEnsCountdown(65)
+            // Start polling after a brief delay
+            pollTimer.current = setTimeout(poll, 3000)
+        } catch (err: any) {
+            setEnsRegError(err.message || 'Failed to start registration')
+            setEnsRegStatus('error')
+        }
+    }
+
+    // Countdown timer for waiting phase
+    useEffect(() => {
+        if (ensRegStatus === 'waiting' && ensCountdown > 0) {
+            const timer = setTimeout(() => setEnsCountdown(c => c - 1), 1000)
+            return () => clearTimeout(timer)
+        }
+    }, [ensRegStatus, ensCountdown])
+
+    // Cleanup poll timer on unmount
+    useEffect(() => {
+        return () => {
+            if (pollTimer.current) clearTimeout(pollTimer.current)
+            if (availabilityTimer.current) clearTimeout(availabilityTimer.current)
+        }
+    }, [])
 
     const handleOpenBridgeModal = () => {
         if (!circleAddress) {
@@ -73,36 +234,19 @@ export function Employee() {
         if (!circleAddress) throw new Error('No wallet connected')
 
         console.log('Withdrawing', amount, 'to bank account')
-        setTxStatus({ type: 'info', message: 'Processing bank transfer...' })
 
-        try {
-            // For demo, use mock bank account ID
-            const response = await fetch('http://localhost:3000/api/withdraw/to-bank', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    bankAccountId: 'demo-bank-123', // In production, this would be a real bank ID
-                    amount: amount,
-                    currency: 'USD'
-                })
-            })
+        // Staged mock flow simulating Circle Mint off-ramp:
+        // In production this would be: user wallet → platform wallet (challenge) → bank payout (businessAccount API)
+        setTxStatus({ type: 'info', message: 'Transferring USDC to off-ramp provider...' })
+        await new Promise(r => setTimeout(r, 1500))
 
-            if (!response.ok) {
-                // Fallback to old payout API for demo
-                await backendApi.payout(amount, 'bank-account')
-            } else {
-                const payout = await response.json()
-                console.log('Payout created:', payout)
-            }
+        setTxStatus({ type: 'info', message: 'Converting USDC to USD...' })
+        await new Promise(r => setTimeout(r, 1200))
 
-            setTxStatus({ type: 'success', message: 'Bank transfer initiated! Funds will arrive in 1-3 business days.' })
-            setTimeout(() => refreshBalance(), 3000)
-        } catch (err: any) {
-            console.error('Bank withdrawal error:', err)
-            // Fallback
-            await backendApi.payout(amount, 'bank-account')
-            setTxStatus({ type: 'success', message: 'Bank transfer initiated! Funds will arrive in 1-3 business days.' })
-        }
+        setTxStatus({ type: 'info', message: 'Initiating wire transfer to bank ****1234...' })
+        await new Promise(r => setTimeout(r, 1000))
+
+        setTxStatus({ type: 'success', message: `$${parseFloat(amount).toFixed(2)} USD sent to bank ****1234. Arrives in 1-3 business days.` })
     }
 
     // Not logged in - show login prompt
@@ -184,19 +328,158 @@ export function Employee() {
                         <span className="token">USDC</span>
                     </div>
 
-                    {/* Wallet Address - shareable with employer */}
+                    {/* Wallet Address / ENS - shareable with employer */}
                     <div className="wallet-address-section">
-                        <span className="label">Your Wallet Address (share with employer):</span>
-                        <div className="address-row">
-                            <code className="address">{circleAddress}</code>
-                            <button
-                                className="btn btn-sm btn-ghost"
-                                onClick={copyAddress}
-                                title="Copy address"
-                            >
-                                {copiedAddress ? '✓ Copied!' : '📋 Copy'}
-                            </button>
-                        </div>
+                        {linkedEns ? (
+                            <>
+                                <span className="label">Your ENS Identity (share with employer):</span>
+                                <div className="address-row">
+                                    <code className="address ens-linked">{linkedEns}</code>
+                                    <button className="btn btn-sm btn-ghost" onClick={copyAddress} title="Copy ENS name">
+                                        {copiedAddress ? '✓ Copied!' : '📋 Copy'}
+                                    </button>
+                                    <button className="btn btn-sm btn-ghost" onClick={handleUnlinkENS} title="Unlink ENS">
+                                        Unlink
+                                    </button>
+                                </div>
+                                <div className="address-sub">
+                                    Wallet: <code>{circleAddress?.slice(0, 10)}...{circleAddress?.slice(-8)}</code>
+                                </div>
+                            </>
+                        ) : (
+                            <>
+                                <span className="label">Your Wallet Address (share with employer):</span>
+                                <div className="address-row">
+                                    <code className="address">{circleAddress}</code>
+                                    <button className="btn btn-sm btn-ghost" onClick={copyAddress} title="Copy address">
+                                        {copiedAddress ? '✓ Copied!' : '📋 Copy'}
+                                    </button>
+                                </div>
+
+                                {/* ENS Registration */}
+                                <div className="ens-register-section">
+                                    <span className="label">Register an ENS name for your wallet:</span>
+                                    <div className="ens-input-group">
+                                        <input
+                                            type="text"
+                                            className="input"
+                                            placeholder="yourname"
+                                            value={ensRegInput}
+                                            onChange={(e) => handleEnsRegInputChange(e.target.value)}
+                                            disabled={ensRegStatus !== 'idle' && ensRegStatus !== 'error'}
+                                        />
+                                        <span className="ens-suffix">.eth</span>
+                                    </div>
+
+                                    {/* Availability status */}
+                                    {isCheckingAvailability && (
+                                        <div className="ens-availability checking">
+                                            <span className="spinner-sm"></span>
+                                            <span>Checking availability...</span>
+                                        </div>
+                                    )}
+                                    {!isCheckingAvailability && ensAvailability && ensRegInput && (
+                                        <div className={`ens-availability ${ensAvailability.available ? 'available' : 'taken'}`}>
+                                            {ensAvailability.available ? (
+                                                <>
+                                                    <span>&#10003; {ensRegInput}.eth is available!</span>
+                                                    <span className="ens-price">Cost: {ensAvailability.price} ETH/year</span>
+                                                </>
+                                            ) : (
+                                                <span>&#10007; {ensRegInput}.eth is taken</span>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* Register button */}
+                                    {ensAvailability?.available && ensRegStatus === 'idle' && (
+                                        <button
+                                            className="btn btn-primary"
+                                            onClick={handleRegisterENS}
+                                        >
+                                            Register {ensRegInput}.eth
+                                        </button>
+                                    )}
+
+                                    {/* Registration progress */}
+                                    {ensRegStatus !== 'idle' && ensRegStatus !== 'error' && (
+                                        <div className="ens-progress">
+                                            <div className={`ens-step ${ensRegStatus === 'committing' ? 'active' : 'done'}`}>
+                                                <span className="step-icon">
+                                                    {ensRegStatus === 'committing' ? <span className="spinner-sm"></span> : '&#10003;'}
+                                                </span>
+                                                <span>Submitting commitment...</span>
+                                            </div>
+                                            {(ensRegStatus === 'waiting' || ensRegStatus === 'registering' || ensRegStatus === 'complete') && (
+                                                <div className={`ens-step ${ensRegStatus === 'waiting' ? 'active' : 'done'}`}>
+                                                    <span className="step-icon">
+                                                        {ensRegStatus === 'waiting' ? <span className="spinner-sm"></span> : '&#10003;'}
+                                                    </span>
+                                                    <span>
+                                                        {ensRegStatus === 'waiting'
+                                                            ? `Waiting for confirmation... ${ensCountdown > 0 ? `(~${ensCountdown}s)` : ''}`
+                                                            : 'Commitment confirmed'}
+                                                    </span>
+                                                </div>
+                                            )}
+                                            {(ensRegStatus === 'registering' || ensRegStatus === 'complete') && (
+                                                <div className={`ens-step ${ensRegStatus === 'registering' ? 'active' : 'done'}`}>
+                                                    <span className="step-icon">
+                                                        {ensRegStatus === 'registering' ? <span className="spinner-sm"></span> : '&#10003;'}
+                                                    </span>
+                                                    <span>
+                                                        {ensRegStatus === 'registering'
+                                                            ? `Registering ${ensRegInput}.eth...`
+                                                            : `${ensRegInput}.eth is yours!`}
+                                                    </span>
+                                                </div>
+                                            )}
+                                            {ensRegStatus === 'complete' && (
+                                                <div className="ens-success">
+                                                    &#127881; {ensRegInput}.eth has been registered and linked to your wallet!
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* Error */}
+                                    {ensRegError && (
+                                        <p className="error-text">{ensRegError}</p>
+                                    )}
+
+                                    {/* Link existing (secondary option) */}
+                                    <div className="ens-link-toggle">
+                                        <button
+                                            className="btn btn-ghost btn-sm"
+                                            onClick={() => setShowLinkExisting(!showLinkExisting)}
+                                        >
+                                            {showLinkExisting ? 'Hide' : 'Already have an ENS name? Link it'}
+                                        </button>
+                                    </div>
+                                    {showLinkExisting && (
+                                        <div className="ens-link-section">
+                                            <div className="ens-link-form">
+                                                <input
+                                                    type="text"
+                                                    className="input"
+                                                    placeholder="yourname.eth"
+                                                    value={ensInput}
+                                                    onChange={(e) => setEnsInput(e.target.value)}
+                                                />
+                                                <button
+                                                    className="btn btn-outline btn-sm"
+                                                    onClick={handleLinkENS}
+                                                    disabled={isLinkingEns || !ensInput}
+                                                >
+                                                    {isLinkingEns ? 'Verifying...' : 'Link ENS'}
+                                                </button>
+                                            </div>
+                                            {ensLinkError && <p className="error-text">{ensLinkError}</p>}
+                                        </div>
+                                    )}
+                                </div>
+                            </>
+                        )}
                     </div>
 
                     <div className="balance-actions">
@@ -333,6 +616,7 @@ export function Employee() {
                 onClose={() => setIsBridgeModalOpen(false)}
                 balance={circleBalance}
                 walletAddress={circleAddress}
+                ensName={linkedEns || undefined}
                 onWithdrawToWallet={handleWithdrawToWallet}
                 onWithdrawToBank={handleWithdrawToBank}
             />

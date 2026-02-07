@@ -1,16 +1,18 @@
 import { useAccount, useConnect, useDisconnect } from 'wagmi'
+import { useENSName } from '../hooks/useENS'
 import './ConnectButton.css'
 
 export function ConnectButton() {
     const { address, isConnected } = useAccount()
     const { connect, connectors, isPending } = useConnect()
     const { disconnect } = useDisconnect()
+    const { name: ensName } = useENSName(address ?? null)
 
     if (isConnected && address) {
         return (
             <div className="connect-button-wrapper">
                 <button className="btn btn-outline connect-btn connected" onClick={() => disconnect()}>
-                    <span className="address">{formatAddress(address)}</span>
+                    <span className="address">{ensName || formatAddress(address)}</span>
                     <span className="disconnect-text">Disconnect</span>
                 </button>
             </div>

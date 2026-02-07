@@ -141,7 +141,7 @@ export function Employer() {
             console.log(`Open Channel: Input=${depositAmount}, Units=${depositUnits}`)
 
             // Create channel via Yellow SDK using resolved address
-            await createChannel(resolvedAddress, depositUnits, rateUnits)
+            await createChannel(resolvedAddress, depositUnits, rateUnits, resolvedEnsName || undefined)
 
             // Clear form
             setNewEmployee('')

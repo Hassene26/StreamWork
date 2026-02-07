@@ -431,10 +431,12 @@ class YellowService {
         }
 
 
+        const ensMap = JSON.parse(localStorage.getItem('streamwork_channel_ens') || '{}')
         const channel: PaymentChannel = {
             id: ch.channel_id,
             employer: this.userAddress || '',
             employee: employeeAddress,
+            employeeEns: existing?.employeeEns || ensMap[ch.channel_id] || undefined,
             totalDeposit: newTotalDeposit,
             // Preserve balances if they exist, only update from server if explicitly provided
             employerBalance: ch.employer_balance
@@ -536,11 +538,12 @@ class YellowService {
     private _pendingCounterparty: string | null = null
     private _pendingDepositAmount: bigint | null = null
     private _pendingRate: bigint | null = null
+    private _pendingEnsName: string | null = null
 
     /**
      * Create a new payment channel
      */
-    async createChannel(counterparty: string, depositAmount: bigint, rate: bigint): Promise<string | null> {
+    async createChannel(counterparty: string, depositAmount: bigint, rate: bigint, ensName?: string): Promise<string | null> {
         if (!this.sessionSigner || !this.ws) {
             throw new Error('Not connected to Yellow Network')
         }
@@ -549,6 +552,7 @@ class YellowService {
         this._pendingCounterparty = counterparty
         this._pendingDepositAmount = depositAmount
         this._pendingRate = rate
+        this._pendingEnsName = ensName || null
 
         const createChannelMsg = await createCreateChannelMessage(
             this.sessionSigner,
@@ -587,6 +591,7 @@ class YellowService {
             id: channel_id,
             employer: this.userAddress || '',
             employee: employeeAddress,
+            employeeEns: this._pendingEnsName || undefined,
             totalDeposit: 0n,
             employerBalance: 0n,
             employeeBalance: 0n,
@@ -597,10 +602,18 @@ class YellowService {
             lastUpdate: new Date(),
         }
 
+        // Cache ENS in localStorage for persistence across reconnects
+        if (this._pendingEnsName) {
+            const ensMap = JSON.parse(localStorage.getItem('streamwork_channel_ens') || '{}')
+            ensMap[channel_id] = this._pendingEnsName
+            localStorage.setItem('streamwork_channel_ens', JSON.stringify(ensMap))
+        }
+
         // Clear pending
         this._pendingCounterparty = null
         this._pendingDepositAmount = null
         this._pendingRate = null
+        this._pendingEnsName = null
 
         this.channels.set(channel_id, newChannel)
         this.notifyChannelUpdate(newChannel)

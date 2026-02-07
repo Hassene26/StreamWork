@@ -13,7 +13,7 @@ interface UseYellowChannelReturn {
     isConnected: boolean
     isConnecting: boolean
     channels: PaymentChannel[]
-    createChannel: (counterparty: string, depositAmount: bigint, rate: bigint) => Promise<string | null>
+    createChannel: (counterparty: string, depositAmount: bigint, rate: bigint, ensName?: string) => Promise<string | null>
     fundChannel: (channelId: string, amount: bigint) => Promise<void>
     closeChannel: (channelId: string, destination?: string) => Promise<string | null>
     sendPayment: (amount: bigint, recipient: string) => Promise<void>
@@ -119,10 +119,10 @@ export function useYellowChannel(): UseYellowChannelReturn {
         return () => clearInterval(interval)
     }, [])
 
-    const createChannel = useCallback(async (counterparty: string, depositAmount: bigint, rate: bigint): Promise<string | null> => {
+    const createChannel = useCallback(async (counterparty: string, depositAmount: bigint, rate: bigint, ensName?: string): Promise<string | null> => {
         try {
             setError(null)
-            return await yellowService.createChannel(counterparty, depositAmount, rate)
+            return await yellowService.createChannel(counterparty, depositAmount, rate, ensName)
         } catch (err) {
             console.error('Failed to create channel:', err)
             setError(err instanceof Error ? err : new Error('Failed to create channel'))

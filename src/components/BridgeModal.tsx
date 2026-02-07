@@ -6,6 +6,7 @@ interface WithdrawModalProps {
     onClose: () => void
     balance: string
     walletAddress: string | null
+    ensName?: string
     onWithdrawToWallet: (chain: string, address: string, amount: string) => Promise<void>
     onWithdrawToBank: (amount: string) => Promise<void>
 }
@@ -28,6 +29,7 @@ export function BridgeModal({
     onClose,
     balance,
     walletAddress,
+    ensName,
     onWithdrawToWallet,
     onWithdrawToBank,
 }: WithdrawModalProps) {
@@ -128,7 +130,7 @@ export function BridgeModal({
                             <div className="source-details">
                                 <span className="source-name">Circle Wallet</span>
                                 <span className="source-address">
-                                    {walletAddress?.slice(0, 8)}...{walletAddress?.slice(-6)}
+                                    {ensName || `${walletAddress?.slice(0, 8)}...${walletAddress?.slice(-6)}`}
                                 </span>
                             </div>
                             <span className="source-balance">${balance} USDC</span>

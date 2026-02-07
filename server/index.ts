@@ -4,6 +4,10 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { initiateUserControlledWalletsClient } from '@circle-fin/user-controlled-wallets';
 import { v4 as uuidv4 } from 'uuid';
+import { createPublicClient, createWalletClient, http, encodeFunctionData, namehash, type Hex } from 'viem';
+import { sepolia } from 'viem/chains';
+import { privateKeyToAccount } from 'viem/accounts';
+import crypto from 'crypto';
 
 // Load .env from parent directory (project root)
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
@@ -23,6 +27,149 @@ console.log('API Key format check - contains colons:', apiKey.includes(':'));
 const circleClient = initiateUserControlledWalletsClient({
     apiKey: apiKey,
 });
+
+// ============================================
+// ENS REGISTRATION SETUP (Sepolia)
+// Backend-sponsored registration — pays gas so users don't need ETH
+// ============================================
+
+const ENS_REGISTRAR_CONTROLLER = '0xfb3cE5D01e0f33f41DbB39035dB9745962F1f968' as const;
+const ENS_PUBLIC_RESOLVER = '0xE99638b40E4Fff0129D56f03b55b6bbC4BBE49b5' as const;
+const ENS_REGISTRATION_DURATION = BigInt(365 * 24 * 60 * 60); // 1 year in seconds
+
+const ensRegistrarAbi = [
+    {
+        name: 'available',
+        type: 'function',
+        stateMutability: 'view',
+        inputs: [{ name: 'label', type: 'string' }],
+        outputs: [{ name: '', type: 'bool' }],
+    },
+    {
+        name: 'rentPrice',
+        type: 'function',
+        stateMutability: 'view',
+        inputs: [
+            { name: 'label', type: 'string' },
+            { name: 'duration', type: 'uint256' },
+        ],
+        outputs: [
+            {
+                name: 'price',
+                type: 'tuple',
+                components: [
+                    { name: 'base', type: 'uint256' },
+                    { name: 'premium', type: 'uint256' },
+                ],
+            },
+        ],
+    },
+    {
+        name: 'makeCommitment',
+        type: 'function',
+        stateMutability: 'pure',
+        inputs: [
+            {
+                name: 'registration',
+                type: 'tuple',
+                components: [
+                    { name: 'label', type: 'string' },
+                    { name: 'owner', type: 'address' },
+                    { name: 'duration', type: 'uint256' },
+                    { name: 'secret', type: 'bytes32' },
+                    { name: 'resolver', type: 'address' },
+                    { name: 'data', type: 'bytes[]' },
+                    { name: 'reverseRecord', type: 'uint8' },
+                    { name: 'referrer', type: 'bytes32' },
+                ],
+            },
+        ],
+        outputs: [{ name: 'commitment', type: 'bytes32' }],
+    },
+    {
+        name: 'commit',
+        type: 'function',
+        stateMutability: 'nonpayable',
+        inputs: [{ name: 'commitment', type: 'bytes32' }],
+        outputs: [],
+    },
+    {
+        name: 'register',
+        type: 'function',
+        stateMutability: 'payable',
+        inputs: [
+            {
+                name: 'registration',
+                type: 'tuple',
+                components: [
+                    { name: 'label', type: 'string' },
+                    { name: 'owner', type: 'address' },
+                    { name: 'duration', type: 'uint256' },
+                    { name: 'secret', type: 'bytes32' },
+                    { name: 'resolver', type: 'address' },
+                    { name: 'data', type: 'bytes[]' },
+                    { name: 'reverseRecord', type: 'uint8' },
+                    { name: 'referrer', type: 'bytes32' },
+                ],
+            },
+        ],
+        outputs: [],
+    },
+    {
+        name: 'minCommitmentAge',
+        type: 'function',
+        stateMutability: 'view',
+        inputs: [],
+        outputs: [{ name: '', type: 'uint256' }],
+    },
+] as const;
+
+const ensResolverAbi = [
+    {
+        name: 'setAddr',
+        type: 'function',
+        stateMutability: 'nonpayable',
+        inputs: [
+            { name: 'node', type: 'bytes32' },
+            { name: 'a', type: 'address' },
+        ],
+        outputs: [],
+    },
+] as const;
+
+// Sepolia viem clients for ENS registration
+const sepoliaPublicClient = createPublicClient({
+    chain: sepolia,
+    transport: http('https://ethereum-sepolia-rpc.publicnode.com'),
+});
+
+const ensPrivateKey = process.env.ENS_REGISTRAR_PRIVATE_KEY;
+let ensWalletClient: ReturnType<typeof createWalletClient> | null = null;
+
+if (ensPrivateKey) {
+    const account = privateKeyToAccount(`0x${ensPrivateKey.replace('0x', '')}` as Hex);
+    ensWalletClient = createWalletClient({
+        account,
+        chain: sepolia,
+        transport: http('https://ethereum-sepolia-rpc.publicnode.com'),
+    });
+    console.log('ENS Registrar wallet loaded:', account.address);
+} else {
+    console.warn('ENS_REGISTRAR_PRIVATE_KEY not set — ENS registration disabled');
+}
+
+// In-memory job store for async ENS registration
+interface ENSRegistrationJob {
+    id: string;
+    label: string;
+    ownerAddress: string;
+    status: 'committing' | 'waiting' | 'registering' | 'complete' | 'error';
+    txHash?: string;
+    error?: string;
+    createdAt: number;
+}
+
+const ensJobs = new Map<string, ENSRegistrationJob>();
 
 // Middleware to log requests
 app.use((req, res, next) => {
@@ -264,156 +411,199 @@ app.post('/api/withdraw/create-transfer', async (req, res) => {
     }
 });
 
-// 10. Link Bank Account (for fiat withdrawal)
-// POST /api/bank/link
-app.post('/api/bank/link', async (req, res) => {
-    try {
-        const { billingDetails, bankAddress, accountNumber, routingNumber } = req.body;
+// ============================================
+// BANK WITHDRAWAL ENDPOINTS
+// In production, these would use Circle Mint businessAccount API:
+//   1. User wallet → platform wallet (challenge flow above)
+//   2. Platform → bank payout (businessAccount/payouts API)
+// Currently mocked for hackathon demo.
+// ============================================
 
-        if (!accountNumber || !routingNumber) {
-            return res.status(400).json({ error: 'Missing accountNumber or routingNumber' });
+// ============================================
+// ENS REGISTRATION ENDPOINTS
+// Backend-sponsored registration on Sepolia
+// ============================================
+
+// 8. Check ENS Name Availability
+app.post('/api/ens/available', async (req, res) => {
+    try {
+        const { label } = req.body;
+        if (!label || typeof label !== 'string') {
+            return res.status(400).json({ error: 'Missing label' });
         }
 
-        const response = await fetch('https://api-sandbox.circle.com/v1/businessAccount/banks/wires', {
-            method: 'POST',
-            headers: {
-                'Accept': 'application/json',
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify({
-                billingDetails: billingDetails || {
-                    name: 'StreamWork User',
-                    city: 'New York',
-                    country: 'US',
-                    line1: '123 Main St',
-                    district: 'NY',
-                    postalCode: '10001',
-                },
-                bankAddress: bankAddress || {
-                    bankName: 'Bank of America',
-                    city: 'New York',
-                    country: 'US',
-                    line1: '100 Financial Blvd',
-                    district: 'NY',
-                },
-                accountNumber,
-                routingNumber,
-                idempotencyKey: uuidv4(),
-            }),
+        const isAvailable = await sepoliaPublicClient.readContract({
+            address: ENS_REGISTRAR_CONTROLLER,
+            abi: ensRegistrarAbi,
+            functionName: 'available',
+            args: [label],
         });
 
-        const data = await response.json();
-
-        if (!response.ok) {
-            console.error('Link Bank Error:', data);
-            return res.status(response.status).json(data);
+        let price = { base: '0', premium: '0' };
+        if (isAvailable) {
+            const priceResult = await sepoliaPublicClient.readContract({
+                address: ENS_REGISTRAR_CONTROLLER,
+                abi: ensRegistrarAbi,
+                functionName: 'rentPrice',
+                args: [label, ENS_REGISTRATION_DURATION],
+            });
+            price = {
+                base: priceResult.base.toString(),
+                premium: priceResult.premium.toString(),
+            };
         }
 
-        // Returns: { id, status, description, trackingRef }
-        res.json(data.data);
+        res.json({ available: isAvailable, price });
     } catch (error: any) {
-        console.error('Link Bank Error:', error?.message);
-        res.status(500).json({ error: 'Failed to link bank account' });
+        console.error('ENS Available Error:', error.message);
+        res.status(500).json({ error: 'Failed to check ENS availability', details: error.message });
     }
 });
 
-// 11. List Linked Bank Accounts
-// GET /api/bank/accounts
-app.get('/api/bank/accounts', async (req, res) => {
+// 9. Start ENS Registration (async — returns jobId)
+app.post('/api/ens/register', async (req, res) => {
     try {
-        const response = await fetch('https://api-sandbox.circle.com/v1/businessAccount/banks/wires', {
-            method: 'GET',
-            headers: {
-                'Accept': 'application/json',
-                'Authorization': `Bearer ${apiKey}`,
-            },
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-            return res.status(response.status).json(data);
+        const { label, ownerAddress } = req.body;
+        if (!label || !ownerAddress) {
+            return res.status(400).json({ error: 'Missing label or ownerAddress' });
+        }
+        if (!ensWalletClient) {
+            return res.status(503).json({ error: 'ENS registration not configured (missing private key)' });
         }
 
-        res.json(data.data || []);
+        // Create job
+        const jobId = uuidv4();
+        const job: ENSRegistrationJob = {
+            id: jobId,
+            label,
+            ownerAddress,
+            status: 'committing',
+            createdAt: Date.now(),
+        };
+        ensJobs.set(jobId, job);
+
+        // Return jobId immediately — registration runs in background
+        res.json({ jobId });
+
+        // Run registration asynchronously
+        runENSRegistration(job).catch((err) => {
+            console.error('ENS registration failed:', err);
+            job.status = 'error';
+            job.error = err.message;
+        });
     } catch (error: any) {
-        console.error('List Banks Error:', error?.message);
-        res.status(500).json({ error: 'Failed to list bank accounts' });
+        console.error('ENS Register Error:', error.message);
+        res.status(500).json({ error: 'Failed to start ENS registration', details: error.message });
     }
 });
 
-// 12. Withdraw to Bank (create payout)
-// POST /api/withdraw/to-bank
-app.post('/api/withdraw/to-bank', async (req, res) => {
-    try {
-        const { bankAccountId, amount, currency } = req.body;
-
-        if (!bankAccountId || !amount) {
-            return res.status(400).json({ error: 'Missing bankAccountId or amount' });
-        }
-
-        const response = await fetch('https://api-sandbox.circle.com/v1/businessAccount/payouts', {
-            method: 'POST',
-            headers: {
-                'Accept': 'application/json',
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify({
-                destination: {
-                    type: 'wire',
-                    id: bankAccountId,
-                },
-                amount: {
-                    currency: currency || 'USD',
-                    amount: amount.toString(),
-                },
-                idempotencyKey: uuidv4(),
-            }),
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-            console.error('Withdraw to Bank Error:', data);
-            return res.status(response.status).json(data);
-        }
-
-        // Returns: { id, status, amount, destination }
-        res.json(data.data);
-    } catch (error: any) {
-        console.error('Withdraw to Bank Error:', error?.message);
-        res.status(500).json({ error: 'Failed to withdraw to bank' });
+// 10. Check ENS Registration Status
+app.get('/api/ens/status/:jobId', async (req, res) => {
+    const job = ensJobs.get(req.params.jobId);
+    if (!job) {
+        return res.status(404).json({ error: 'Job not found' });
     }
+    res.json({
+        status: job.status,
+        label: job.label,
+        name: `${job.label}.eth`,
+        txHash: job.txHash,
+        error: job.error,
+    });
 });
 
-// 13. Get Payout Status
-// GET /api/withdraw/payout-status/:payoutId
-app.get('/api/withdraw/payout-status/:payoutId', async (req, res) => {
-    try {
-        const { payoutId } = req.params;
+// Background ENS registration logic
+async function runENSRegistration(job: ENSRegistrationJob) {
+    if (!ensWalletClient) throw new Error('ENS wallet not configured');
 
-        const response = await fetch(`https://api-sandbox.circle.com/v1/businessAccount/payouts/${payoutId}`, {
-            method: 'GET',
-            headers: {
-                'Accept': 'application/json',
-                'Authorization': `Bearer ${apiKey}`,
-            },
-        });
+    const { label, ownerAddress } = job;
+    const secret = `0x${crypto.randomBytes(32).toString('hex')}` as Hex;
 
-        const data = await response.json();
+    // Encode setAddr call for the resolver data[] parameter
+    // This makes the name resolve to the owner's Circle wallet address immediately
+    const node = namehash(`${label}.eth`);
+    const setAddrData = encodeFunctionData({
+        abi: ensResolverAbi,
+        functionName: 'setAddr',
+        args: [node, ownerAddress as `0x${string}`],
+    });
 
-        if (!response.ok) {
-            return res.status(response.status).json(data);
-        }
+    const registration = {
+        label,
+        owner: ownerAddress as `0x${string}`,
+        duration: ENS_REGISTRATION_DURATION,
+        secret,
+        resolver: ENS_PUBLIC_RESOLVER,
+        data: [setAddrData],
+        reverseRecord: 0,
+        referrer: '0x0000000000000000000000000000000000000000000000000000000000000000' as Hex,
+    };
 
-        res.json(data.data);
-    } catch (error: any) {
-        console.error('Get Payout Status Error:', error?.message);
-        res.status(500).json({ error: 'Failed to get payout status' });
-    }
-});
+    console.log(`[ENS] Starting registration for ${label}.eth → ${ownerAddress}`);
+
+    // Step 1: makeCommitment (read-only)
+    const commitment = await sepoliaPublicClient.readContract({
+        address: ENS_REGISTRAR_CONTROLLER,
+        abi: ensRegistrarAbi,
+        functionName: 'makeCommitment',
+        args: [registration],
+    });
+    console.log(`[ENS] Commitment hash:`, commitment);
+
+    // Step 2: commit (transaction)
+    job.status = 'committing';
+    const commitTx = await ensWalletClient.writeContract({
+        address: ENS_REGISTRAR_CONTROLLER,
+        abi: ensRegistrarAbi,
+        functionName: 'commit',
+        args: [commitment],
+    });
+    console.log(`[ENS] Commit tx:`, commitTx);
+
+    // Wait for commit to be mined
+    await sepoliaPublicClient.waitForTransactionReceipt({ hash: commitTx });
+    console.log(`[ENS] Commit confirmed`);
+
+    // Step 3: Wait for minCommitmentAge
+    job.status = 'waiting';
+    const minAge = await sepoliaPublicClient.readContract({
+        address: ENS_REGISTRAR_CONTROLLER,
+        abi: ensRegistrarAbi,
+        functionName: 'minCommitmentAge',
+    });
+    const waitMs = (Number(minAge) + 5) * 1000; // Add 5s buffer
+    console.log(`[ENS] Waiting ${waitMs / 1000}s for commitment age...`);
+    await new Promise(r => setTimeout(r, waitMs));
+
+    // Step 4: Get price and register
+    job.status = 'registering';
+    const price = await sepoliaPublicClient.readContract({
+        address: ENS_REGISTRAR_CONTROLLER,
+        abi: ensRegistrarAbi,
+        functionName: 'rentPrice',
+        args: [label, ENS_REGISTRATION_DURATION],
+    });
+    const totalPrice = price.base + price.premium;
+    // Add 10% buffer for price fluctuations
+    const value = totalPrice + (totalPrice / 10n);
+
+    console.log(`[ENS] Registering ${label}.eth (price: ${totalPrice} wei)`);
+    const registerTx = await ensWalletClient.writeContract({
+        address: ENS_REGISTRAR_CONTROLLER,
+        abi: ensRegistrarAbi,
+        functionName: 'register',
+        args: [registration],
+        value,
+    });
+    console.log(`[ENS] Register tx:`, registerTx);
+
+    // Wait for registration to be mined
+    await sepoliaPublicClient.waitForTransactionReceipt({ hash: registerTx });
+
+    job.status = 'complete';
+    job.txHash = registerTx;
+    console.log(`[ENS] ✅ ${label}.eth registered successfully! tx: ${registerTx}`);
+}
 
 app.listen(port, () => {
     console.log(`StreamWork Backend running at http://localhost:${port}`);

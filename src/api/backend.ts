@@ -147,6 +147,59 @@ export const backendApi = {
             throw new Error(error.error || 'Failed to create transfer')
         }
         return response.json()
-    }
+    },
+
+    /**
+     * Check ENS name availability on Sepolia
+     * Returns: { available: boolean, price: { base: string, premium: string } }
+     */
+    checkENSAvailability: async (label: string) => {
+        const response = await fetch(`${API_URL}/ens/available`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ label })
+        })
+        if (!response.ok) {
+            const error = await response.json()
+            throw new Error(error.error || 'Failed to check availability')
+        }
+        return response.json() as Promise<{ available: boolean; price: { base: string; premium: string } }>
+    },
+
+    /**
+     * Start ENS name registration (async, backend-sponsored)
+     * Returns: { jobId: string }
+     */
+    registerENS: async (label: string, ownerAddress: string) => {
+        const response = await fetch(`${API_URL}/ens/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ label, ownerAddress })
+        })
+        if (!response.ok) {
+            const error = await response.json()
+            throw new Error(error.error || 'Failed to start registration')
+        }
+        return response.json() as Promise<{ jobId: string }>
+    },
+
+    /**
+     * Check ENS registration job status
+     * Returns: { status, label, name, txHash?, error? }
+     */
+    getENSRegistrationStatus: async (jobId: string) => {
+        const response = await fetch(`${API_URL}/ens/status/${jobId}`)
+        if (!response.ok) {
+            const error = await response.json()
+            throw new Error(error.error || 'Failed to get status')
+        }
+        return response.json() as Promise<{
+            status: 'committing' | 'waiting' | 'registering' | 'complete' | 'error'
+            label: string
+            name: string
+            txHash?: string
+            error?: string
+        }>
+    },
 }
 

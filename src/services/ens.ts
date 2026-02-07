@@ -1,18 +1,18 @@
 /**
  * ENS Service - Name resolution and text record lookup
  *
- * Uses viem's built-in ENS support on Ethereum mainnet
- * (ENS is only on mainnet, but works with any wallet)
+ * Uses viem's built-in ENS support on Ethereum Sepolia
+ * ENS is deployed on Sepolia — register free names at app.ens.domains (switch to Sepolia)
  */
 
 import { createPublicClient, http } from 'viem'
-import { mainnet } from 'viem/chains'
+import { sepolia } from 'viem/chains'
 import { normalize } from 'viem/ens'
 
-// Use mainnet for ENS resolution (ENS is only deployed on mainnet)
+// Use Sepolia for ENS resolution (free registration, matches Circle wallet network)
 const publicClient = createPublicClient({
-    chain: mainnet,
-    transport: http('https://eth.llamarpc.com'), // Free mainnet RPC
+    chain: sepolia,
+    transport: http('https://ethereum-sepolia-rpc.publicnode.com'),
 })
 
 export interface ENSProfile {
