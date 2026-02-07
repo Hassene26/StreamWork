@@ -17,7 +17,11 @@ import {
     createCloseChannelMessage,
     createGetLedgerBalancesMessage,
     createTransferMessage,
+    createGetChannelsMessage,
+    createAppSessionMessage,
     createSubmitAppStateMessage,
+    RPCProtocolVersion,
+    RPCAppStateIntent,
 } from '@erc7824/nitrolite'
 import { createPublicClient, http } from 'viem'
 import { sepolia } from 'viem/chains'
@@ -48,6 +52,7 @@ export interface PaymentChannel {
     ratePerMinute: bigint
     status: ChannelStatus
     version: bigint
+    appSessionId?: string  // Application Session ID for streaming payments
     createdAt: Date
     lastUpdate: Date
 }
@@ -90,6 +95,9 @@ class YellowService {
     private _connectionStatus: ConnectionStatus = 'disconnected'
     private reconnectAttempts = 0
     private maxReconnectAttempts = 5
+
+    // Pending operations
+    private _pendingAppSessionChannelId: string | null = null
 
     /**
      * Initialize viem clients with MetaMask (browser wallet)
@@ -199,7 +207,7 @@ class YellowService {
         // Create and send auth request
         const authRequestMsg = await createAuthRequestMessage({
             address: this.userAddress,
-            application: 'StreamWork',
+            application: 'streamwork',  // Lowercase to match App Session
             ...authParams,
         })
 
@@ -216,7 +224,12 @@ class YellowService {
     private async handleMessage(event: MessageEvent): Promise<void> {
         try {
             const response = JSON.parse(event.data)
-            console.log('📨 Received:', response.res?.[1] || response.error?.code || 'unknown')
+
+            // DEBUG: Log ALL raw messages to identify correct method names
+            console.log('📨 RAW WebSocket message:', JSON.stringify(response, null, 2))
+
+            const method = response.res?.[1] || response.error?.code || 'unknown'
+            console.log('📨 Received method:', method)
 
             if (response.error) {
                 console.error('❌ RPC Error Response:', JSON.stringify(response.error, null, 2))
@@ -232,7 +245,7 @@ class YellowService {
                 return
             }
 
-            const method = response.res?.[1]
+            // method already declared above for logging
             const payload = response.res?.[2]
 
             switch (method) {
@@ -262,6 +275,21 @@ class YellowService {
 
                 case 'transfer':
                     this.handleTransferComplete(payload)
+                    break
+
+                case 'create_app_session':
+                case 'app_session':        // Alternative name
+                case 'session_created':    // From Quick Start docs
+                    console.log('🎯 Received app session response:', method, payload)
+                    this.handleAppSessionCreated(payload)
+                    break
+
+                case 'submit_app_state':
+                    this.handleAppStateSubmitted(payload)
+                    break
+
+                case 'asu': // App Session Update notification
+                    this.handleAppSessionUpdate(payload)
                     break
 
                 case 'cu': // Channel Update notification
@@ -330,7 +358,7 @@ class YellowService {
             const signer = createEIP712AuthMessageSigner(
                 this.walletClient as any,
                 authParams,
-                { name: 'StreamWork' }
+                { name: 'streamwork' }  // Must match auth request application name
             )
 
             // Create and send verification - this is where MetaMask popup should appear
@@ -354,8 +382,22 @@ class YellowService {
         console.log('✅ Authenticated with Yellow Network!')
         console.log('   Session key:', payload.session_key)
 
-        // Query ledger balances
+        // Query ledger balances and channels
         this.queryLedgerBalances()
+        this.queryChannels()
+    }
+
+    /**
+     * Query active channels
+     */
+    private async queryChannels(): Promise<void> {
+        if (!this.sessionSigner || !this.ws) return
+
+        console.log('🔍 Querying channels...')
+        const channelsMsg = await createGetChannelsMessage(
+            this.sessionSigner
+        )
+        this.ws.send(channelsMsg)
     }
 
     /**
@@ -402,6 +444,18 @@ class YellowService {
             if (!employeeAddress && ch.participant && ch.participant.toLowerCase() !== myAddress) {
                 employeeAddress = ch.participant
             }
+
+            // Try 'allocations' (most reliable if present)
+            if (!employeeAddress && (ch.allocations || (ch.state && ch.state.allocations))) {
+                const allocs = ch.allocations || ch.state.allocations
+                if (Array.isArray(allocs)) {
+                    const other = allocs.find((a: any) => {
+                        const dest = a.destination || a.address || ''
+                        return dest && dest.toLowerCase() !== myAddress
+                    })
+                    if (other) employeeAddress = other.destination || other.address
+                }
+            }
         }
 
         employeeAddress = employeeAddress || ''
@@ -446,8 +500,13 @@ class YellowService {
                 ? BigInt(ch.employee_balance)
                 : currentEmployeeBalance,
             ratePerMinute: currentRate,
-            status: ch.status as ChannelStatus,
+            // Preserve 'pending' status if channel is still being set up (no appSessionId yet)
+            // Server may send 'open' before we finish local on-chain setup
+            status: (existing?.status === 'pending' && !existing?.appSessionId)
+                ? 'pending'
+                : (ch.status as ChannelStatus),
             version: ch.version ? BigInt(ch.version) : (existing?.version || 0n),
+            appSessionId: existing?.appSessionId,  // CRITICAL: Preserve App Session ID!
             createdAt: ch.created_at ? new Date(ch.created_at) : (existing?.createdAt || new Date()),
             lastUpdate: ch.updated_at ? new Date(ch.updated_at) : new Date(),
         }
@@ -596,7 +655,7 @@ class YellowService {
             employerBalance: 0n,
             employeeBalance: 0n,
             ratePerMinute: this._pendingRate || 750000n,
-            status: 'open',
+            status: 'pending',  // Will change to 'open' after on-chain creation + funding complete
             version: state && state.version ? BigInt(state.version) : 0n,
             createdAt: new Date(),
             lastUpdate: new Date(),
@@ -653,8 +712,15 @@ class YellowService {
                 console.log('✅ Transaction confirmed')
             }
 
-            // Fund the channel
-            await this.fundChannel(channel_id, fundingAmount)
+            // Option A: Skip channel funding - use App Session directly from unified balance
+            // The App Session allocations will reserve funds from unified balance
+            newChannel.employerBalance = fundingAmount
+            newChannel.employeeBalance = 0n
+            newChannel.totalDeposit = fundingAmount
+            this.channels.set(channel_id, newChannel)
+
+            console.log('🚀 Creating App Session directly from unified balance...')
+            await this.createAppSession(newChannel)
 
         } catch (err) {
             console.error('❌ Error creating channel on-chain:', err)
@@ -686,13 +752,16 @@ class YellowService {
             }
         )
 
+        console.log(`📤 Sending resize channel message for channel ${channelId}...`)
         this.ws.send(resizeMsg)
+        console.log(`✅ Resize message sent`)
     }
 
     /**
      * Handle channel resized response
      */
     private async handleChannelResized(payload: any): Promise<void> {
+        console.log('🔄 handleChannelResized triggered:', JSON.stringify(payload))
         const { channel_id, state, server_signature } = payload
         console.log('✅ Channel resized:', channel_id)
 
@@ -716,7 +785,9 @@ class YellowService {
             // Get proof states from chain
             let proofStates: any[] = []
             try {
+                console.log(`🔍 Fetching on-chain data for ${channel_id}...`)
                 const onChainData = await this.nitroliteClient.getChannelData(channel_id as `0x${string}`)
+                console.log('✅ On-chain data fetched')
                 if (onChainData.lastValidState) {
                     proofStates = [onChainData.lastValidState]
                 }
@@ -725,10 +796,18 @@ class YellowService {
             }
 
             // Submit resize to chain
-            const { txHash } = await this.nitroliteClient.resizeChannel({
-                resizeState,
-                proofStates,
-            })
+            // Submit resize to chain - WITH TIMEOUT
+            console.log('📝 Requesting wallet signature for Resize Transaction (Funding)... CHECK YOUR WALLET!')
+
+            const { txHash } = await Promise.race([
+                this.nitroliteClient.resizeChannel({
+                    resizeState,
+                    proofStates,
+                }),
+                new Promise<any>((_, reject) =>
+                    setTimeout(() => reject(new Error('Resize Transaction Timed Out! Did you sign the wallet prompt?')), 30000)
+                )
+            ])
 
             console.log('✅ Channel funded on-chain:', txHash)
 
@@ -744,7 +823,7 @@ class YellowService {
                 // Set employer balance to the funded amount (employee starts at 0)
                 channel.employerBalance = totalFunded
                 channel.employeeBalance = 0n
-                channel.status = 'open'
+                // Status remains 'pending' - will become 'open' in handleAppSessionCreated
                 channel.version = resizeState.version
                 channel.lastUpdate = new Date()
 
@@ -753,11 +832,236 @@ class YellowService {
                 console.log(`   Employer balance: ${channel.employerBalance}`)
 
                 this.notifyChannelUpdate(channel)
+
+                // Create Application Session for streaming payments
+                console.log('🚀 About to create App Session for channel:', channel.id)
+                console.log('   Channel state:', JSON.stringify({
+                    id: channel.id,
+                    employer: channel.employer,
+                    employee: channel.employee,
+                    employerBalance: channel.employerBalance.toString(),
+                    employeeBalance: channel.employeeBalance.toString(),
+                    status: channel.status
+                }, null, 2))
+                await this.createAppSession(channel)
+                console.log('✅ createAppSession call completed for channel:', channel.id)
             }
 
         } catch (err) {
             console.error('Error resizing channel on-chain:', err)
             this.notifyError(err as Error)
+        }
+    }
+
+    /**
+     * Create an Application Session for a channel
+     * This is required to use submit_app_state for streaming payments
+     */
+    private async createAppSession(channel: PaymentChannel): Promise<void> {
+        console.log('🏁 createAppSession called for', channel.id)
+        if (!this.sessionSigner || !this.ws) {
+            console.error('Cannot create app session: not connected')
+            return
+        }
+
+        console.log(`🔧 Creating Application Session for channel ${channel.id}`)
+
+        try {
+            // Helper: Convert from smallest units (6 decimals) to decimal string
+            // e.g., 10000000n → "10.0"
+            const toDecimalAmount = (amount: bigint): string => {
+                const whole = amount / 1_000_000n
+                const decimal = amount % 1_000_000n
+                if (decimal === 0n) {
+                    return whole.toString()
+                }
+                return `${whole}.${decimal.toString().padStart(6, '0').replace(/0+$/, '')}`
+            }
+
+            const employerAmount = toDecimalAmount(channel.employerBalance)
+            const employeeAmount = toDecimalAmount(channel.employeeBalance)
+
+            console.log(`📊 App Session allocations: employer=${employerAmount}, employee=${employeeAmount}`)
+
+            const appSessionMsg = await createAppSessionMessage(
+                this.sessionSigner,
+                {
+                    definition: {
+                        application: 'streamwork',  // Must match auth request application name
+                        protocol: RPCProtocolVersion.NitroRPC_0_4,
+                        participants: [channel.employer as `0x${string}`, channel.employee as `0x${string}`],
+                        weights: [100, 0],  // Employer has full control over state updates
+                        quorum: 100,
+                        challenge: 0,
+                        nonce: Date.now(),
+                    },
+                    // CRITICAL: Both participants MUST be in allocations, even if employee has 0 balance
+                    // Amounts must be in DECIMAL format (e.g., "10.0"), not smallest units!
+                    allocations: [
+                        { participant: channel.employer as `0x${string}`, asset: 'ytest.usd', amount: employerAmount },
+                        { participant: channel.employee as `0x${string}`, asset: 'ytest.usd', amount: employeeAmount },
+                    ],
+                }
+            )
+
+            console.log('📤 App Session message to send:', appSessionMsg)
+            this.ws.send(appSessionMsg)
+            console.log('📤 App Session creation message sent for channel', channel.id)
+
+            // Store pending info to link response back to channel
+            this._pendingAppSessionChannelId = channel.id
+
+        } catch (err) {
+            console.error('Failed to create app session:', err)
+        }
+    }
+
+    /**
+     * Handle Application Session created response
+     */
+    private handleAppSessionCreated(payload: any): void {
+        console.log('✅ App Session created:', payload)
+
+        const appSessionId = payload.app_session_id
+        if (!appSessionId) {
+            console.error('No app_session_id in response')
+            return
+        }
+
+        // Link to the pending channel
+        if (this._pendingAppSessionChannelId) {
+            const channel = this.channels.get(this._pendingAppSessionChannelId)
+            if (channel) {
+                channel.appSessionId = appSessionId
+                channel.status = 'open'  // NOW the channel is fully ready for streaming!
+                console.log(`🔗 Linked App Session ${appSessionId} to channel ${channel.id} - Status: OPEN`)
+                this.notifyChannelUpdate(channel)
+            }
+            this._pendingAppSessionChannelId = null
+        }
+    }
+
+    /**
+     * Handle submit_app_state response (payment confirmation)
+     */
+    private handleAppStateSubmitted(payload: any): void {
+        console.log('✅ App state submitted:', payload)
+
+        // Update local channel state based on the confirmed allocations
+        const appSessionId = payload.app_session_id
+        if (appSessionId) {
+            // Find the channel by app session ID
+            for (const channel of this.channels.values()) {
+                if (channel.appSessionId === appSessionId) {
+                    // Update version
+                    channel.version = BigInt(payload.version || channel.version)
+                    channel.lastUpdate = new Date()
+
+                    // Parse allocations if present
+                    if (payload.allocations) {
+                        for (const alloc of payload.allocations) {
+                            if (alloc.participant?.toLowerCase() === channel.employer.toLowerCase()) {
+                                channel.employerBalance = BigInt(alloc.amount || 0)
+                            } else if (alloc.participant?.toLowerCase() === channel.employee.toLowerCase()) {
+                                channel.employeeBalance = BigInt(alloc.amount || 0)
+                            }
+                        }
+                    }
+
+                    this.notifyChannelUpdate(channel)
+                    break
+                }
+            }
+        }
+    }
+
+    /**
+     * Handle App Session Update notification (asu)
+     * These are pushed by the server when app session state changes
+     */
+    private handleAppSessionUpdate(payload: any): void {
+        console.log('📱 App Session Update:', payload)
+
+        const appSession = payload.app_session
+        const allocations = payload.participant_allocations
+
+        if (!appSession?.app_session_id) return
+
+        // Find the channel linked to this app session
+        for (const channel of this.channels.values()) {
+            if (channel.appSessionId === appSession.app_session_id) {
+                // Update version
+                channel.version = BigInt(appSession.version || channel.version)
+                channel.lastUpdate = new Date()
+
+                // Update allocations
+                if (allocations) {
+                    for (const alloc of allocations) {
+                        if (alloc.participant?.toLowerCase() === channel.employer.toLowerCase()) {
+                            channel.employerBalance = BigInt(alloc.amount || 0)
+                        } else if (alloc.participant?.toLowerCase() === channel.employee.toLowerCase()) {
+                            channel.employeeBalance = BigInt(alloc.amount || 0)
+                        }
+                    }
+                }
+
+                console.log(`📊 Channel ${channel.id} updated from asu: version=${channel.version}, empBal=${channel.employerBalance}`)
+                this.notifyChannelUpdate(channel)
+                break
+            }
+        }
+    }
+
+    /**
+     * Send a channel state update for streaming payments
+     * Uses submit_app_state to update allocations within the Application Session
+     */
+    private async sendChannelUpdate(channel: PaymentChannel, amount: bigint): Promise<void> {
+        if (!this.sessionSigner || !this.ws) throw new Error('Not authenticated')
+
+        if (!channel.appSessionId) {
+            throw new Error('No Application Session for this channel - cannot send state update')
+        }
+
+        // Safety check
+        if (channel.employerBalance < amount) {
+            console.error(`❌ Insufficient channel balance. Has: ${channel.employerBalance}, Need: ${amount}`)
+            throw new Error('Insufficient channel balance')
+        }
+
+        const newEmployerBal = channel.employerBalance - amount
+        const newEmployeeBal = channel.employeeBalance + amount
+        const nextVersion = Number((channel.version || 0n) + 1n)
+
+        console.log(`📊 Updating Channel ${channel.id} (v${channel.version}) -> v${nextVersion}: Emp ${newEmployerBal} | Wkr ${newEmployeeBal}`)
+
+        try {
+            const updateMsg = await createSubmitAppStateMessage(
+                this.sessionSigner,
+                {
+                    app_session_id: channel.appSessionId as `0x${string}`,
+                    intent: RPCAppStateIntent.Operate,
+                    version: nextVersion,
+                    allocations: [
+                        { participant: channel.employer as `0x${string}`, asset: 'ytest.usd', amount: newEmployerBal.toString() },
+                        { participant: channel.employee as `0x${string}`, asset: 'ytest.usd', amount: newEmployeeBal.toString() },
+                    ],
+                }
+            )
+
+            console.log('📤 Sending Channel Update Message:', JSON.stringify(updateMsg, null, 2))
+            this.ws.send(updateMsg)
+            console.log('📤 Channel Update sent')
+
+            // Optimistically update local state
+            channel.employerBalance = newEmployerBal
+            channel.employeeBalance = newEmployeeBal
+            channel.version = BigInt(nextVersion)
+            channel.lastUpdate = new Date()
+
+        } catch (e) {
+            console.error('Failed to create channel update:', e)
+            throw e
         }
     }
 
@@ -774,21 +1078,43 @@ class YellowService {
             throw new Error('Not authenticated with Yellow Network')
         }
 
-        // Check if we have an open funded channel with this recipient
+        // Check if we have an open funded channel with an App Session for this recipient
         let targetChannel: PaymentChannel | undefined
         for (const ch of this.channels.values()) {
-            if (ch.employee.toLowerCase() === recipient.toLowerCase() && ch.status === 'open' && ch.totalDeposit > 0n) {
+            if (ch.employee.toLowerCase() === recipient.toLowerCase() && ch.status === 'open') {
                 targetChannel = ch
                 break
             }
         }
 
+        // Prioritize App Session state updates (channel-based) over Ledger Transfers
         if (targetChannel) {
-            console.log(`🔄 Sending payment via Channel Update (Channel ${targetChannel.id})`)
-            return this.sendChannelUpdate(targetChannel, amount)
+            if (targetChannel.appSessionId) {
+                console.log(`🔄 Sending payment via App Session (Channel ${targetChannel.id})`)
+                return this.sendChannelUpdate(targetChannel, amount)
+            } else {
+                // Throw specific error so caller knows to retry - not a fatal error
+                const err = new Error(`App Session not ready for channel ${targetChannel.id}`)
+                err.name = 'AppSessionNotReady'
+                console.log(`⏳ ${err.message} - caller should retry`)
+                throw err
+            }
         }
 
-        console.log(`💸 Sending payment via Ledger Transfer (No funded channel found)`)
+        // Fall back to Ledger Transfer if NO channel exists
+        console.log(`💸 Sending payment via Ledger Transfer to ${recipient}`)
+
+        // Validate recipient address
+        if (!recipient || recipient.trim() === '') {
+            console.error('❌ Cannot send payment: recipient address is empty')
+            console.error('   Available channels:', Array.from(this.channels.entries()).map(([id, ch]) => ({
+                id,
+                employee: ch.employee,
+                status: ch.status,
+                appSessionId: ch.appSessionId
+            })))
+            throw new Error('Recipient address is empty - check employee address detection')
+        }
 
         try {
             // Use 'ytest.usd' symbol for the sandbox, not the token address
@@ -808,54 +1134,6 @@ class YellowService {
         } catch (err) {
             console.error('❌ Failed to create/send transfer message:', err)
             throw err
-        }
-    }
-
-    private async sendChannelUpdate(channel: PaymentChannel, amount: bigint): Promise<void> {
-        if (!this.sessionSigner || !this.ws) throw new Error('Not authenticated')
-
-        // Safety check
-        if (channel.employerBalance < amount) {
-            console.error(`❌ Insufficient channel balance. Has: ${channel.employerBalance}, Need: ${amount}`)
-            throw new Error('Insufficient channel balance')
-        }
-
-        const newEmployerBal = channel.employerBalance - amount
-        const newEmployeeBal = channel.employeeBalance + amount
-        const nextVersion = (channel.version || 0n) + 1n
-
-        console.log(`📊 Updating Channel ${channel.id} (v${channel.version}) -> v${nextVersion}: Emp ${newEmployerBal} | Wkr ${newEmployeeBal}`)
-
-        try {
-            const updateMsg = await createSubmitAppStateMessage(
-                this.sessionSigner,
-                {
-                    app_session_id: channel.id as `0x${string}`,
-                    version: Number(nextVersion),
-                    allocations: [
-                        {
-                            destination: channel.employer as `0x${string}`,
-                            amount: newEmployerBal.toString(),
-                            allocation_type: 0 // simple
-                        },
-                        {
-                            destination: channel.employee as `0x${string}`,
-                            amount: newEmployeeBal.toString(),
-                            allocation_type: 0
-                        }
-                    ],
-                } as any, // Cast to any to avoid complex TS generics
-                undefined, // requestId
-                undefined  // timestamp
-            )
-
-            console.log('📤 Sending Channel Update Message:', JSON.stringify(updateMsg, null, 2))
-            this.ws.send(updateMsg)
-            console.log('📤 Channel Update sent')
-
-        } catch (e) {
-            console.error('Failed to create channel update:', e)
-            throw e
         }
     }
 
@@ -951,14 +1229,14 @@ class YellowService {
                     { name: 'users', type: 'address[]' },
                     { name: 'tokens', type: 'address[]' }
                 ],
-                outputs: [{ type: 'uint256[]' }],
+                outputs: [{ type: 'uint256[][]' }],
                 stateMutability: 'view'
             }],
             functionName: 'getAccountsBalances',
             args: [[userAddress], [token]],
-        }) as bigint[]
+        }) as bigint[][]
 
-        const withdrawableBalance = result[0]
+        const withdrawableBalance = result[0]?.[0] || 0n
         console.log(`💰 Withdrawable balance: ${withdrawableBalance}`)
 
         if (withdrawableBalance > 0n) {
@@ -1023,14 +1301,35 @@ class YellowService {
     }
 
     private handleBalanceUpdate(payload: any) {
-        // Payload expected: { asset: '...', balance: '123456' }
-        if (payload && payload.balance) {
-            try {
-                const balance = BigInt(payload.balance)
-                this._currentBalance = balance
-                this.notifyBalanceUpdate(balance)
-            } catch (e) {
-                console.error('Failed to parse balance update', e)
+        console.log('🔍 Parsing balance update payload:', JSON.stringify(payload, null, 2))
+
+        // Handle balance_updates array format (from bu messages)
+        // Example: { balance_updates: [{ asset: 'ytest.usd', amount: '83057.99987' }] }
+        const updates = payload?.balance_updates || [payload]
+
+        for (const update of updates) {
+            const asset = update?.asset || update?.token
+            const balanceStr = update?.balance || update?.amount
+
+            if (asset && (asset === 'ytest.usd' || asset.toLowerCase().includes('usd'))) {
+                try {
+                    // Handle decimal amounts - server may return "83057.99987"
+                    // Convert to smallest units (6 decimals for USDC-like tokens)
+                    let balance: bigint
+                    if (balanceStr?.includes('.')) {
+                        const [whole, decimal = ''] = balanceStr.split('.')
+                        const paddedDecimal = decimal.padEnd(6, '0').slice(0, 6)
+                        balance = BigInt(whole) * 1_000_000n + BigInt(paddedDecimal)
+                    } else {
+                        balance = BigInt(balanceStr || 0)
+                    }
+
+                    console.log(`💰 Updated balance for ${asset}: ${balance} (raw: ${balanceStr})`)
+                    this._currentBalance = balance
+                    this.notifyBalanceUpdate(balance)
+                } catch (e) {
+                    console.error('Failed to parse balance update', e)
+                }
             }
         }
     }
@@ -1071,6 +1370,221 @@ class YellowService {
 
     getBalance(): bigint {
         return this._currentBalance
+    }
+
+    // ============================================
+    // ON-CHAIN DEPOSIT METHODS
+    // ============================================
+
+    /**
+     * Get user's USDC balance in their wallet (not yet deposited)
+     */
+    async getWalletTokenBalance(): Promise<bigint> {
+        if (!this.nitroliteClient) {
+            throw new Error('NitroliteClient not initialized')
+        }
+        return await this.nitroliteClient.getTokenBalance(YTEST_USD_TOKEN)
+    }
+
+    /**
+     * Get user's balance in Yellow Network Custody (deposited, ready for channels)
+     */
+    async getCustodyBalance(): Promise<bigint> {
+        if (!this.nitroliteClient) {
+            throw new Error('NitroliteClient not initialized')
+        }
+        return await this.nitroliteClient.getAccountBalance(YTEST_USD_TOKEN)
+    }
+
+    /**
+     * Get current ERC20 allowance for Custody contract
+     */
+    async getTokenAllowance(): Promise<bigint> {
+        if (!this.nitroliteClient) {
+            throw new Error('NitroliteClient not initialized')
+        }
+        return await this.nitroliteClient.getTokenAllowance(YTEST_USD_TOKEN)
+    }
+
+    /**
+     * Approve Custody contract to spend USDC
+     * This is required before depositing
+     * @returns Transaction hash
+     */
+    async approveToken(amount: bigint): Promise<string> {
+        if (!this.nitroliteClient || !this.publicClient) {
+            throw new Error('NitroliteClient or PublicClient not initialized')
+        }
+
+        console.log(`🔐 Approving ${amount} tokens for Custody contract...`)
+        const txHash = await this.nitroliteClient.approveTokens(YTEST_USD_TOKEN, amount)
+        console.log(`✅ Approval transaction submitted: ${txHash}`)
+
+        console.log('⏳ Waiting for approval confirmation...')
+        await this.publicClient.waitForTransactionReceipt({ hash: txHash })
+        console.log('✅ Approval confirmed')
+
+        return txHash
+    }
+
+    /**
+     * Deposit USDC from wallet to Yellow Network Custody
+     * User must approve first!
+     * @returns Transaction hash
+     */
+    async depositToCustody(amount: bigint): Promise<string> {
+        if (!this.nitroliteClient || !this.publicClient) {
+            throw new Error('NitroliteClient or PublicClient not initialized')
+        }
+
+        // Check allowance
+        const allowance = await this.getTokenAllowance()
+        if (allowance < amount) {
+            console.log(`⚠️ Insufficient allowance (${allowance} < ${amount}). Approving...`)
+            await this.approveToken(amount)
+        }
+
+        console.log(`💰 Depositing ${amount} tokens to Custody...`)
+        const txHash = await this.nitroliteClient.deposit(YTEST_USD_TOKEN, amount)
+        console.log(`✅ Deposit transaction submitted: ${txHash}`)
+
+        console.log('⏳ Waiting for deposit confirmation...')
+        await this.publicClient.waitForTransactionReceipt({ hash: txHash })
+        console.log('✅ Deposit confirmed')
+
+        // Refresh balances
+        this.queryLedgerBalances()
+
+        return txHash
+    }
+
+    /**
+     * Mint test tokens (Faucet)
+     * @returns Transaction hash
+     */
+    async mintToken(amount: bigint): Promise<string> {
+        if (!this.walletClient || !this.publicClient) {
+            throw new Error('WalletClient or PublicClient not initialized')
+        }
+
+        console.log(`🚰 Minting ${amount} tokens...`)
+
+        // Minimal ABI for mint function
+        const mintAbi = [{
+            inputs: [
+                { name: 'to', type: 'address' },
+                { name: 'amount', type: 'uint256' }
+            ],
+            name: 'mint',
+            outputs: [],
+            stateMutability: 'nonpayable',
+            type: 'function'
+        }] as const
+
+        try {
+            const txHash = await this.walletClient.writeContract({
+                address: YTEST_USD_TOKEN,
+                abi: mintAbi,
+                functionName: 'mint',
+                args: [this.userAddress as `0x${string}`, amount],
+                chain: sepolia,
+                account: this.userAddress as `0x${string}`
+            })
+
+            console.log(`✅ Mint transaction submitted: ${txHash}`)
+
+            console.log('⏳ Waiting for minting confirmation...')
+            await this.publicClient.waitForTransactionReceipt({ hash: txHash })
+            console.log('✅ Minting confirmed')
+
+            return txHash
+        } catch (err) {
+            console.error('Failed to mint tokens. The contract might not be public.', err)
+            throw err
+        }
+    }
+
+    /**
+     * Withdraw USDC from Custody back to wallet
+     * @returns Transaction hash
+     */
+    async withdrawFromCustody(amount: bigint): Promise<string> {
+        if (!this.nitroliteClient || !this.publicClient) {
+            throw new Error('NitroliteClient or PublicClient not initialized')
+        }
+
+        console.log(`💸 Withdrawing ${amount} tokens from Custody...`)
+        const txHash = await this.nitroliteClient.withdrawal(YTEST_USD_TOKEN, amount)
+        console.log(`✅ Withdrawal transaction submitted: ${txHash}`)
+
+        console.log('⏳ Waiting for withdrawal confirmation...')
+        await this.publicClient.waitForTransactionReceipt({ hash: txHash })
+        console.log('✅ Withdrawal confirmed')
+
+        // Refresh balances
+        this.queryLedgerBalances()
+
+        return txHash
+    }
+
+    /**
+     * Get custody balance for ANY address
+     */
+    async getCustodyBalanceForAddress(address: string): Promise<bigint> {
+        if (!this.publicClient) return 0n
+
+        const CUSTODY_ADDRESS = '0x019B65A265EB3363822f2752141b3dF16131b262'
+
+        try {
+            // Retrieve balance from Custody contract
+            // Uses getAccountsBalances(address[], address[]) -> uint256[][]
+            const result = await this.publicClient.readContract({
+                address: CUSTODY_ADDRESS,
+                abi: [{
+                    type: 'function',
+                    name: 'getAccountsBalances',
+                    inputs: [{ name: 'users', type: 'address[]' }, { name: 'tokens', type: 'address[]' }],
+                    outputs: [{ type: 'uint256[][]' }],
+                    stateMutability: 'view'
+                }] as const,
+                functionName: 'getAccountsBalances',
+                args: [[address as `0x${string}`], [YTEST_USD_TOKEN]],
+            }) as bigint[][]
+
+            return result[0]?.[0] || 0n
+        } catch (err) {
+            console.error('Failed to fetch custody balance:', err)
+            return 0n
+        }
+    }
+
+    /**
+     * Get balance of a specific channel
+     */
+    async getChannelBalance(channelId: string): Promise<bigint> {
+        if (!this.publicClient) return 0n
+
+        const CUSTODY_ADDRESS = '0x019B65A265EB3363822f2752141b3dF16131b262'
+
+        try {
+            const result = await this.publicClient.readContract({
+                address: CUSTODY_ADDRESS,
+                abi: [{
+                    name: 'getChannelBalances',
+                    type: 'function',
+                    stateMutability: 'view',
+                    inputs: [{ name: 'channelId', type: 'bytes32' }, { name: 'tokens', type: 'address[]' }],
+                    outputs: [{ name: 'balances', type: 'uint256[]' }]
+                }] as const,
+                functionName: 'getChannelBalances',
+                args: [channelId as `0x${string}`, [YTEST_USD_TOKEN]],
+            }) as bigint[]
+
+            return result[0] || 0n
+        } catch (err) {
+            console.error('Failed to fetch channel balance:', err)
+            return 0n
+        }
     }
 }
 

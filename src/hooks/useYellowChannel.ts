@@ -17,7 +17,11 @@ interface UseYellowChannelReturn {
     fundChannel: (channelId: string, amount: bigint) => Promise<void>
     closeChannel: (channelId: string, destination?: string) => Promise<string | null>
     sendPayment: (amount: bigint, recipient: string) => Promise<void>
-    balance: bigint
+    depositToCustody: (amount: bigint) => Promise<string | null>
+    withdrawFromCustody: (amount: bigint) => Promise<string | null>
+    mintToken: (amount: bigint) => Promise<string | null>
+    balance: bigint // Custody balance
+    walletBalance: bigint // Wallet token balance
     error: Error | null
 }
 
@@ -29,6 +33,7 @@ export function useYellowChannel(): UseYellowChannelReturn {
     const [isConnected, setIsConnected] = useState(false)
     const [isConnecting, setIsConnecting] = useState(false)
     const [balance, setBalance] = useState<bigint>(0n)
+    const [walletBalance, setWalletBalance] = useState<bigint>(0n)
     const [channels, setChannels] = useState<PaymentChannel[]>([])
     const [error, setError] = useState<Error | null>(null)
 
@@ -113,11 +118,24 @@ export function useYellowChannel(): UseYellowChannelReturn {
             setChannels(yellowService.getAllChannels())
         }
 
+        const refreshWalletBalance = async () => {
+            try {
+                const wb = await yellowService.getWalletTokenBalance()
+                setWalletBalance(wb)
+            } catch (e) {
+                // Ignore errors if not connected
+            }
+        }
+
         refreshChannels()
-        const interval = setInterval(refreshChannels, 2000)
+        refreshWalletBalance()
+        const interval = setInterval(() => {
+            refreshChannels()
+            refreshWalletBalance()
+        }, 2000)
 
         return () => clearInterval(interval)
-    }, [])
+    }, [walletConnected])
 
     const createChannel = useCallback(async (counterparty: string, depositAmount: bigint, rate: bigint, ensName?: string): Promise<string | null> => {
         try {
@@ -161,6 +179,42 @@ export function useYellowChannel(): UseYellowChannelReturn {
         }
     }, [])
 
+    const depositToCustody = useCallback(async (amount: bigint): Promise<string | null> => {
+        try {
+            setError(null)
+            const txHash = await yellowService.depositToCustody(amount)
+            return txHash
+        } catch (err) {
+            console.error('Failed to deposit to custody:', err)
+            setError(err instanceof Error ? err : new Error('Failed to deposit'))
+            return null
+        }
+    }, [])
+
+    const withdrawFromCustody = useCallback(async (amount: bigint): Promise<string | null> => {
+        try {
+            setError(null)
+            const txHash = await yellowService.withdrawFromCustody(amount)
+            return txHash
+        } catch (err) {
+            console.error('Failed to withdraw from custody:', err)
+            setError(err instanceof Error ? err : new Error('Failed to withdraw'))
+            return null
+        }
+    }, [])
+
+    const mintToken = useCallback(async (amount: bigint): Promise<string | null> => {
+        try {
+            setError(null)
+            const txHash = await yellowService.mintToken(amount)
+            return txHash
+        } catch (err) {
+            console.error('Failed to mint tokens:', err)
+            setError(err instanceof Error ? err : new Error('Failed to mint tokens'))
+            return null
+        }
+    }, [])
+
     return {
         connectionStatus,
         isConnected,
@@ -171,6 +225,10 @@ export function useYellowChannel(): UseYellowChannelReturn {
         fundChannel,
         closeChannel,
         sendPayment,
+        depositToCustody,
+        withdrawFromCustody,
+        mintToken,
+        walletBalance,
         error,
     }
 }

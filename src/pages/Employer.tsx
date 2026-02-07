@@ -3,6 +3,7 @@ import { useAccount } from 'wagmi'
 import { ConnectButton } from '../components/ConnectButton'
 import { useYellowChannel } from '../hooks/useYellowChannel'
 import { useResolveInput } from '../hooks/useENS'
+import { yellowService } from '../services/yellow'
 import './Employer.css'
 
 interface EmployeeDisplay {
@@ -25,6 +26,11 @@ export function Employer() {
         createChannel,
         closeChannel,
         sendPayment,
+        depositToCustody,
+        withdrawFromCustody,
+        mintToken,
+        balance: yellowBalance,
+        walletBalance,
         error
     } = useYellowChannel()
 
@@ -35,6 +41,11 @@ export function Employer() {
     const [isOpening, setIsOpening] = useState(false)
 
     const [pausedEmployees, setPausedEmployees] = useState<Record<string, boolean>>({})
+    const [custodyDepositAmount, setCustodyDepositAmount] = useState('100')
+    const [isDepositing, setIsDepositing] = useState(false)
+    const [custodyWithdrawAmount, setCustodyWithdrawAmount] = useState('')
+    const [isWithdrawing, setIsWithdrawing] = useState(false)
+    const [isMinting, setIsMinting] = useState(false)
 
     // ENS resolution for new employee input
     const {
@@ -44,13 +55,65 @@ export function Employer() {
         isLoading: isResolvingENS
     } = useResolveInput(newEmployee)
 
+    // Debug helper: Expose checkCustodyBalance to window
+    useEffect(() => {
+        // @ts-ignore
+        window.checkCustodyBalance = async (address: string) => {
+            console.log(`🔍 Checking custody balance for ${address}...`)
+            try {
+                // @ts-ignore
+                const balance = await yellowService.getCustodyBalanceForAddress(address)
+                console.log(`💰 Balance: ${(Number(balance) / 1e6).toFixed(6)} ytest.usd`)
+                return Number(balance) / 1e6
+            } catch (e) {
+                console.error('Failed to check balance:', e)
+            }
+        }
+
+        // @ts-ignore
+        window.checkChannelBalance = async (channelId: string) => {
+            console.log(`🔍 Checking channel balance for ${channelId}...`)
+            try {
+                // @ts-ignore
+                const balance = await yellowService.getChannelBalance(channelId)
+                console.log(`💰 Channel Balance: ${(Number(balance) / 1e6).toFixed(6)} ytest.usd`)
+                return Number(balance) / 1e6
+            } catch (e) {
+                console.error('Failed to check channel balance:', e)
+            }
+        }
+
+        // @ts-ignore
+        window.checkLocalChannelState = (channelId: string) => {
+            console.log(`🔍 Checking OFF-CHAIN state for ${channelId}...`)
+            // @ts-ignore
+            const channel = yellowService.getChannel(channelId)
+            if (channel) {
+                console.log('📊 Local State:', channel)
+                console.log(`💰 Employer Balance: ${(Number(channel.employerBalance) / 1e6).toFixed(6)}`)
+                console.log(`💰 Employee Balance: ${(Number(channel.employeeBalance) / 1e6).toFixed(6)}`)
+            } else {
+                console.log('❌ Channel not found in local state')
+            }
+        }
+
+        console.log('🛠️ Debug tools ready:')
+        console.log('   await checkCustodyBalance(\'0x...\') - On-Chain Custody')
+        console.log('   await checkChannelBalance(\'0x...\') - On-Chain Channel (Locked)')
+        console.log('   checkLocalChannelState(\'0x...\')    - Off-Chain State (Streaming)')
+    }, [])
+
     // Sync channels to employee display (preserve demo employees)
     useEffect(() => {
         const channelEmployees: EmployeeDisplay[] = channels.map((ch) => {
             const isPaused = pausedEmployees[ch.id]
+            // Try to resolve ENS from local storage
+            const storedEns = localStorage.getItem(`ens_${ch.employee.toLowerCase()}`)
+            const displayName = ch.employeeEns || storedEns || `${ch.employee.slice(0, 8)}...${ch.employee.slice(-6)}`
+
             return {
                 id: ch.id,
-                name: ch.employeeEns || `${ch.employee.slice(0, 8)}...${ch.employee.slice(-6)}`,
+                name: displayName,
                 address: ch.employee,
                 rate: Number(ch.ratePerMinute) / 1e6, // Convert from USDC decimals
                 status: (ch.status === 'streaming' || ch.status === 'open') && !isPaused ? 'active' : 'paused',
@@ -77,53 +140,7 @@ export function Employer() {
         employeesRef.current = employees
     }, [employees])
 
-    // Off-chain streaming loop
-    useEffect(() => {
-        if (!yellowConnected) {
-            console.log('⏳ Streaming loop waiting for Yellow connection...')
-            return
-        }
 
-        console.log('✅ Streaming loop initialized (Connected)')
-
-        // Use a ref for the interval ID to ensure cleanup
-        const intervalId = setInterval(async () => {
-            const currentEmployees = employeesRef.current
-            const activeEmployees = currentEmployees.filter(e => e.status === 'active' && !e.id.startsWith('demo_'))
-
-            console.log('🔄 Streaming Loop Tick:', {
-                total: currentEmployees.length,
-                active: activeEmployees.length,
-                connected: yellowConnected
-            })
-
-            if (activeEmployees.length === 0 && currentEmployees.length > 0) {
-                // console.log('⚠️ No active employees found...')
-            }
-
-            for (const emp of activeEmployees) {
-                try {
-                    // Calculate amount for 5 seconds: (Rate per min / 60) * 5
-                    // Rate is in USDC (e.g. 0.75)
-                    const amountUSDC = (emp.rate / 60) * 5
-                    // Convert to units (6 decimals)
-                    const amountUnits = BigInt(Math.floor(amountUSDC * 1_000_000))
-
-                    if (amountUnits > 0n) {
-                        console.log(`Streaming ${amountUnits} units to ${emp.name}`)
-                        await sendPayment(amountUnits, emp.address)
-                    } else {
-                        // console.log(`⚠️ Amount too small for ${emp.name}: ${amountUSDC}`)
-                    }
-                } catch (err) {
-                    console.error('Streaming failed for', emp.name, err)
-                }
-            }
-        }, 5000)
-
-        // Only cleanup when component unmounts or connection is lost
-        return () => clearInterval(intervalId)
-    }, [yellowConnected, sendPayment])
 
     const handleAddEmployee = async () => {
         console.log("calling handleAddEmployee")
@@ -170,8 +187,125 @@ export function Employer() {
         }
     }
 
+    const handleDeposit = async () => {
+        const amount = parseFloat(custodyDepositAmount)
+        if (isNaN(amount) || amount <= 0) {
+            alert('Please enter a valid deposit amount')
+            return
+        }
+
+        setIsDepositing(true)
+        try {
+            const amountInUnits = BigInt(Math.floor(amount * 1e6)) // USDC has 6 decimals
+            const txHash = await depositToCustody(amountInUnits)
+            if (txHash) {
+                alert(`Deposit successful! TX: ${txHash}`)
+                setCustodyDepositAmount('')
+            }
+        } catch (err) {
+            console.error('Failed to deposit:', err)
+        } finally {
+            setIsDepositing(false)
+        }
+    }
+
+    const handleWithdraw = async () => {
+        const amount = parseFloat(custodyWithdrawAmount)
+        if (isNaN(amount) || amount <= 0) {
+            alert('Please enter a valid withdraw amount')
+            return
+        }
+        if (amount > custodyBalance) {
+            alert('Insufficient custody balance')
+            return
+        }
+
+        setIsWithdrawing(true)
+        try {
+            const amountInUnits = BigInt(Math.floor(amount * 1e6)) // USDC has 6 decimals
+            const txHash = await withdrawFromCustody(amountInUnits)
+            if (txHash) {
+                alert(`Withdrawal successful! TX: ${txHash}`)
+                setCustodyWithdrawAmount('')
+            }
+        } catch (err) {
+            console.error('Failed to withdraw:', err)
+        } finally {
+            setIsWithdrawing(false)
+        }
+    }
+
+    const handleMint = async () => {
+        setIsMinting(true)
+        try {
+            // Mint 1000 tokens
+            const amountInUnits = BigInt(10 * 1e6)
+            const txHash = await mintToken(amountInUnits)
+            if (txHash) {
+                alert(`Mint successful! You received 1,000 TEST USDC. TX: ${txHash}`)
+            }
+        } catch (err) {
+            console.error('Failed to mint:', err)
+        } finally {
+            setIsMinting(false)
+        }
+    }
+
+    // Off-chain streaming loop (Moved here to access handleCloseChannel)
+    useEffect(() => {
+        if (!yellowConnected) {
+            return
+        }
+
+        const intervalId = setInterval(async () => {
+            const currentEmployees = employeesRef.current
+            const activeEmployees = currentEmployees.filter(e => e.status === 'active' && !e.id.startsWith('demo_'))
+
+            for (const emp of activeEmployees) {
+                try {
+                    const amountUSDC = (emp.rate / 60) * 5
+                    const amountUnits = BigInt(Math.floor(amountUSDC * 1_000_000))
+
+                    if (amountUnits > 0n) {
+                        await sendPayment(amountUnits, emp.address)
+                    }
+                } catch (err: any) {
+                    // Handle "App Session not ready" - this is expected during channel setup
+                    // Just skip this cycle, payment will retry on next interval
+                    if (err.name === 'AppSessionNotReady') {
+                        console.log(`⏳ Skipping payment for ${emp.name} - App Session initializing...`)
+                        continue
+                    }
+
+                    console.error('Streaming failed for', emp.name, err)
+
+                    // Auto-close on insufficient funds or generic "execution reverted" which might be funds
+                    // The error message might be "insufficient funds" or "transfer failed"
+                    if (err.message && (
+                        err.message.includes('Insufficient funds') ||
+                        err.message.includes('insufficient funds') ||
+                        err.message.includes('Insufficient channel balance') ||
+                        err.message.includes('exceeds balance') ||
+                        err.message.includes('execution reverted') // Catch-all for contract errors often due to funds
+                    )) {
+                        console.log(`⚠️ Auto-closing channel for ${emp.name} due to insufficient funds`)
+                        // Pause locally first to stop loop immediately
+                        setPausedEmployees(prev => ({ ...prev, [emp.id]: true }))
+                        // Then close on-chain
+                        if (emp.channelId) {
+                            handleCloseChannel(emp.channelId)
+                        }
+                    }
+                }
+            }
+        }, 5000)
+
+        return () => clearInterval(intervalId)
+    }, [yellowConnected, sendPayment])
+
     const totalDeposited = employees.reduce((sum, e) => sum + e.currentBalance + e.totalPaid, 0)
     const activeStreams = employees.filter(e => e.status === 'active').length
+    const custodyBalance = Number(yellowBalance) / 1e6 // Convert from USDC units
 
     if (!walletConnected) {
         return (
@@ -219,6 +353,90 @@ export function Employer() {
                     ⚠️ {error.message}
                 </div>
             )}
+
+            {/* Deposit to Yellow Network Section */}
+            <section className="deposit-section card">
+                <h3>💰 Deposit to Yellow Network</h3>
+                <p className="text-secondary mb-md">
+                    Deposit USDC from your wallet to Yellow Network custody. These funds can then be allocated to payment channels.
+                </p>
+                <div className="deposit-info">
+                    <div className="balance-display">
+                        <span className="label">Wallet Balance:</span>
+                        <span className="value">${(Number(walletBalance) / 1e6).toFixed(2)} ytest.usd</span>
+                    </div>
+                    <div className="balance-display">
+                        <span className="label">Custody Balance:</span>
+                        <span className="value">${custodyBalance.toFixed(2)} ytest.usd</span>
+                        <span className="text-secondary text-sm ml-sm">(Sandbox)</span>
+                    </div>
+                </div>
+                <div className="deposit-form">
+                    <div className="form-row">
+                        <div className="form-group">
+                            <label className="label">Amount (ytest.usd)</label>
+                            <input
+                                type="number"
+                                className="input"
+                                placeholder="100"
+                                value={custodyDepositAmount}
+                                onChange={(e) => setCustodyDepositAmount(e.target.value)}
+                                min="0"
+                                step="any"
+                            />
+                        </div>
+                        <button
+                            className="btn btn-primary"
+                            onClick={handleDeposit}
+                            disabled={isDepositing || !yellowConnected}
+                        >
+                            {isDepositing ? 'Depositing...' : 'Deposit ytest.usd'}
+                        </button>
+                    </div>
+                    <p className="text-secondary text-sm mt-sm">
+                        ⚠️ Deposits use <b>ytest.usd</b> in Sandbox. In production, this will use <b>USDC</b> on Mainnet.
+                    </p>
+                </div>
+
+                <div className="deposit-form mt-lg pt-md border-top">
+                    <h4>Withdraw Funds</h4>
+                    <div className="form-row">
+                        <div className="form-group">
+                            <label className="label">Amount (ytest.usd)</label>
+                            <input
+                                type="number"
+                                className="input"
+                                placeholder="100"
+                                value={custodyWithdrawAmount}
+                                onChange={(e) => setCustodyWithdrawAmount(e.target.value)}
+                                min="0"
+                                step="any"
+                            />
+                        </div>
+                        <button
+                            className="btn btn-secondary"
+                            onClick={handleWithdraw}
+                            disabled={isWithdrawing || !yellowConnected}
+                        >
+                            {isWithdrawing ? 'Withdrawing...' : 'Withdraw ytest.usd'}
+                        </button>
+                    </div>
+                </div>
+
+                <div className="deposit-form mt-lg pt-md border-top">
+                    <h4>🚰 Faucet (Testnet Only)</h4>
+                    <p className="text-secondary mb-sm">
+                        Need test tokens? Mint 1,000 <b>ytest.usd</b> for free to test the deposit flow.
+                    </p>
+                    <button
+                        className="btn btn-outline"
+                        onClick={handleMint}
+                        disabled={isMinting || !walletConnected}
+                    >
+                        {isMinting ? 'Minting...' : 'Mint 1,000 TEST USDC'}
+                    </button>
+                </div>
+            </section>
 
             <section className="add-employee-section card">
                 <h3>Open Payment Channel</h3>
