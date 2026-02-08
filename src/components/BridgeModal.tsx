@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import './BridgeModal.css'
+// import './BridgeModal.css' - Removed in favor of Tailwind
 
 interface WithdrawModalProps {
     isOpen: boolean
@@ -114,48 +114,71 @@ export function BridgeModal({
     }
 
     return (
-        <div className="modal-overlay" onClick={handleClose}>
-            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-                <div className="modal-header">
-                    <h2>💸 Withdraw Funds</h2>
-                    <button className="modal-close" onClick={handleClose}>×</button>
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[1000] animate-in fade-in duration-200" onClick={handleClose}>
+            <div
+                className="bg-[#1a2e1e] border border-[#28392c] rounded-xl w-[90%] max-w-[480px] max-h-[90vh] overflow-y-auto animate-in slide-in-from-bottom-4 duration-300 shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+            >
+                <div className="flex justify-between items-center p-6 border-b border-[#28392c]">
+                    <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                        <span className="material-symbols-outlined text-primary">payments</span>
+                        Withdraw Funds
+                    </h2>
+                    <button
+                        className="text-slate-400 hover:text-white transition-colors text-2xl leading-none"
+                        onClick={handleClose}
+                    >
+                        ×
+                    </button>
                 </div>
 
-                <div className="modal-body">
+                <div className="p-6 flex flex-col gap-6">
                     {/* Source */}
-                    <div className="bridge-source">
-                        <span className="label">From</span>
-                        <div className="source-info">
-                            <div className="source-icon">◉</div>
-                            <div className="source-details">
-                                <span className="source-name">Circle Wallet</span>
-                                <span className="source-address">
+                    <div>
+                        <span className="block text-xs text-slate-400 uppercase font-bold tracking-wider mb-2">From</span>
+                        <div className="bg-black/30 p-4 rounded-lg flex items-center gap-3 border border-[#28392c]">
+                            <div className="size-10 bg-primary/10 rounded-full flex items-center justify-center border border-primary/20">
+                                <span className="text-primary font-bold">◉</span>
+                            </div>
+                            <div className="flex-1">
+                                <span className="block text-sm font-bold text-white">Circle Wallet</span>
+                                <span className="block text-xs text-slate-400 font-mono">
                                     {ensName || `${walletAddress?.slice(0, 8)}...${walletAddress?.slice(-6)}`}
                                 </span>
                             </div>
-                            <span className="source-balance">${balance} USDC</span>
+                            <span className="font-mono font-bold text-white">${balance} <span className="text-slate-500 text-xs">USDC</span></span>
                         </div>
                     </div>
 
                     {/* Destination Selection */}
-                    <div className="bridge-destination">
-                        <span className="label">Withdraw to</span>
-                        <div className="destination-options">
+                    <div>
+                        <span className="block text-xs text-slate-400 uppercase font-bold tracking-wider mb-2">Withdraw to</span>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <button
-                                className={`dest-option ${destination === 'wallet' ? 'active' : ''}`}
+                                className={`flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all ${destination === 'wallet'
+                                        ? 'bg-primary/5 border-primary'
+                                        : 'bg-black/20 border-[#28392c] hover:border-primary/50'
+                                    }`}
                                 onClick={() => setDestination('wallet')}
                             >
-                                <span className="dest-icon">🔗</span>
-                                <span className="dest-name">External Wallet</span>
-                                <span className="dest-desc">Any chain / address</span>
+                                <span className="text-2xl">🔗</span>
+                                <div className="text-center">
+                                    <span className={`block text-sm font-bold ${destination === 'wallet' ? 'text-white' : 'text-slate-300'}`}>External Wallet</span>
+                                    <span className="block text-[10px] text-slate-500">Any chain / address</span>
+                                </div>
                             </button>
                             <button
-                                className={`dest-option ${destination === 'bank' ? 'active' : ''}`}
+                                className={`flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all ${destination === 'bank'
+                                        ? 'bg-primary/5 border-primary'
+                                        : 'bg-black/20 border-[#28392c] hover:border-primary/50'
+                                    }`}
                                 onClick={() => setDestination('bank')}
                             >
-                                <span className="dest-icon">🏦</span>
-                                <span className="dest-name">Bank Account</span>
-                                <span className="dest-desc">1-3 business days</span>
+                                <span className="text-2xl">🏦</span>
+                                <div className="text-center">
+                                    <span className={`block text-sm font-bold ${destination === 'bank' ? 'text-white' : 'text-slate-300'}`}>Bank Account</span>
+                                    <span className="block text-[10px] text-slate-500">1-3 business days</span>
+                                </div>
                             </button>
                         </div>
                     </div>
@@ -164,35 +187,39 @@ export function BridgeModal({
                     {destination === 'wallet' && (
                         <>
                             {/* Chain Selection */}
-                            <div className="bridge-chain">
-                                <span className="label">Destination Chain</span>
-                                <div className="chain-grid">
+                            <div>
+                                <span className="block text-xs text-slate-400 uppercase font-bold tracking-wider mb-2">Destination Chain</span>
+                                <div className="grid grid-cols-3 gap-2">
                                     {SUPPORTED_CHAINS.map((chain) => (
                                         <button
                                             key={chain.id}
-                                            className={`chain-option ${selectedChain === chain.id ? 'active' : ''}`}
+                                            className={`flex flex-col items-center gap-1 p-2 rounded-lg border transition-all ${selectedChain === chain.id
+                                                    ? 'bg-primary/10 border-primary text-white'
+                                                    : 'bg-black/20 border-[#28392c] text-slate-400 hover:border-primary/50'
+                                                }`}
                                             onClick={() => setSelectedChain(chain.id)}
                                         >
-                                            <span className="chain-icon">{chain.icon}</span>
-                                            <span className="chain-name">{chain.name}</span>
+                                            <span className="text-lg">{chain.icon}</span>
+                                            <span className="text-[10px] font-bold text-center leading-tight">{chain.name}</span>
                                         </button>
                                     ))}
                                 </div>
                             </div>
 
                             {/* Destination Address */}
-                            <div className="bridge-address">
-                                <span className="label">Destination Address</span>
-                                <div className="address-input-wrapper">
+                            <div>
+                                <span className="block text-xs text-slate-400 uppercase font-bold tracking-wider mb-2">Destination Address</span>
+                                <div className="flex bg-black/30 border border-[#28392c] rounded-lg p-1">
                                     <input
                                         type="text"
+                                        className="flex-1 bg-transparent border-none text-white text-sm px-3 focus:outline-none font-mono placeholder:text-slate-600"
                                         value={destinationAddress}
                                         onChange={(e) => setDestinationAddress(e.target.value)}
                                         placeholder="0x..."
                                         disabled={status === 'processing'}
                                     />
                                     <button
-                                        className="use-my-btn"
+                                        className="bg-[#28392c] hover:bg-[#3bf169]/20 text-primary text-xs font-bold px-3 py-2 rounded transition-colors"
                                         onClick={useMyAddress}
                                         title="Use my Circle wallet address"
                                     >
@@ -205,27 +232,28 @@ export function BridgeModal({
 
                     {/* Bank-specific fields */}
                     {destination === 'bank' && (
-                        <div className="bank-info">
-                            <span className="label">Linked Bank Account</span>
-                            <div className="bank-card">
-                                <span className="bank-icon">🏦</span>
-                                <div className="bank-details">
-                                    <span className="bank-name">Demo Bank ****1234</span>
-                                    <span className="bank-status">✓ Verified</span>
+                        <div>
+                            <span className="block text-xs text-slate-400 uppercase font-bold tracking-wider mb-2">Linked Bank Account</span>
+                            <div className="bg-black/30 p-4 rounded-lg flex items-center gap-3 border border-[#28392c]">
+                                <span className="text-2xl">🏦</span>
+                                <div>
+                                    <span className="block text-sm font-bold text-white">Demo Bank ****1234</span>
+                                    <span className="block text-xs text-primary">✓ Verified</span>
                                 </div>
                             </div>
-                            <p className="bank-note">
+                            <p className="text-xs text-slate-500 mt-2">
                                 Bank withdrawals are converted to USD and sent via wire transfer.
                             </p>
                         </div>
                     )}
 
                     {/* Amount Input */}
-                    <div className="bridge-amount">
-                        <span className="label">Amount</span>
-                        <div className="amount-input-wrapper">
+                    <div>
+                        <span className="block text-xs text-slate-400 uppercase font-bold tracking-wider mb-2">Amount</span>
+                        <div className="flex bg-black/30 border border-[#28392c] rounded-lg p-1 relative items-center">
                             <input
                                 type="number"
+                                className="flex-1 bg-transparent border-none text-white text-xl px-4 py-2 focus:outline-none font-mono placeholder:text-slate-600"
                                 value={amount}
                                 onChange={(e) => setAmount(e.target.value)}
                                 placeholder="0.00"
@@ -234,48 +262,56 @@ export function BridgeModal({
                                 step="0.01"
                                 disabled={status === 'processing'}
                             />
-                            <span className="currency">USDC</span>
-                            <button className="max-btn" onClick={setMaxAmount}>MAX</button>
+                            <span className="text-slate-500 text-sm font-bold mr-2">USDC</span>
+                            <button
+                                className="bg-primary hover:bg-primary-dark text-[#102215] text-xs font-bold px-3 py-1.5 rounded transition-colors mr-1"
+                                onClick={setMaxAmount}
+                            >
+                                MAX
+                            </button>
                         </div>
                     </div>
 
                     {/* Preview */}
                     {amountNum > 0 && (
-                        <div className="withdraw-preview">
-                            <div className="preview-row">
-                                <span>You send</span>
-                                <span className="preview-value">${amountNum.toFixed(2)} USDC</span>
+                        <div className="bg-primary/5 border border-primary/20 rounded-lg p-4 space-y-2">
+                            <div className="flex justify-between text-sm">
+                                <span className="text-slate-400">You send</span>
+                                <span className="text-white font-mono">${amountNum.toFixed(2)} USDC</span>
                             </div>
-                            <div className="preview-row">
-                                <span>Network fee (est.)</span>
-                                <span className="preview-value">~$0.50</span>
+                            <div className="flex justify-between text-sm">
+                                <span className="text-slate-400">Network fee (est.)</span>
+                                <span className="text-white font-mono">~$0.50</span>
                             </div>
-                            <div className="preview-row total">
-                                <span>You receive (approx.)</span>
-                                <span className="preview-value">${(amountNum - 0.50).toFixed(2)}</span>
+                            <div className="flex justify-between text-sm pt-2 border-t border-primary/10 font-bold">
+                                <span className="text-slate-300">You receive (approx.)</span>
+                                <span className="text-primary font-mono">${(Math.max(0, amountNum - 0.50)).toFixed(2)}</span>
                             </div>
                         </div>
                     )}
 
                     {/* Status */}
                     {status !== 'idle' && (
-                        <div className={`bridge-status ${status}`}>
-                            {status === 'processing' && <span className="spinner-sm"></span>}
-                            {status === 'success' && <span>✓</span>}
-                            {status === 'error' && <span>✗</span>}
+                        <div className={`p-4 rounded-lg flex items-center gap-3 text-sm ${status === 'processing' ? 'bg-blue-500/10 border border-blue-500/20 text-blue-200' :
+                                status === 'success' ? 'bg-green-500/10 border border-green-500/20 text-green-200' :
+                                    'bg-red-500/10 border border-red-500/20 text-red-200'
+                            }`}>
+                            {status === 'processing' && <div className="size-4 rounded-full border-2 border-current border-t-transparent animate-spin" />}
+                            {status === 'success' && <span className="material-symbols-outlined text-lg">check_circle</span>}
+                            {status === 'error' && <span className="material-symbols-outlined text-lg">error</span>}
                             <span>{statusMessage}</span>
                         </div>
                     )}
                 </div>
 
-                <div className="modal-footer">
+                <div className="p-6 border-t border-[#28392c]">
                     {status === 'success' ? (
-                        <button className="btn btn-primary btn-lg" onClick={handleClose}>
+                        <button className="w-full bg-primary hover:bg-primary-dark text-[#102215] font-bold py-3.5 rounded-lg transition-all shadow-[0_0_20px_rgba(19,236,73,0.3)]" onClick={handleClose}>
                             Done
                         </button>
                     ) : (
                         <button
-                            className="btn btn-primary btn-lg"
+                            className="w-full bg-primary hover:bg-primary-dark disabled:opacity-50 disabled:cursor-not-allowed text-[#102215] font-bold py-3.5 rounded-lg transition-all shadow-[0_0_20px_rgba(19,236,73,0.3)] disabled:shadow-none"
                             onClick={handleSubmit}
                             disabled={!canSubmit || status === 'processing'}
                         >

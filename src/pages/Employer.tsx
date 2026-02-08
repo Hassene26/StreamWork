@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
+import { Link } from 'react-router-dom'
 import { useAccount } from 'wagmi'
 import { ConnectButton } from '../components/ConnectButton'
 import { useYellowChannel } from '../hooks/useYellowChannel'
 import { useResolveInput } from '../hooks/useENS'
 import { yellowService } from '../services/yellow'
-import './Employer.css'
 
 interface EmployeeDisplay {
     id: string
@@ -39,6 +39,9 @@ export function Employer() {
     const [depositAmount, setDepositAmount] = useState('1000')
     const [ratePerMinute, setRatePerMinute] = useState('0.75')
     const [isOpening, setIsOpening] = useState(false)
+    const [showAddModal, setShowAddModal] = useState(false)
+    const [showTreasuryModal, setShowTreasuryModal] = useState(false) // New modal for Treasury ops
+    const [searchTerm, setSearchTerm] = useState('')
 
     const [pausedEmployees, setPausedEmployees] = useState<Record<string, boolean>>({})
     const [custodyDepositAmount, setCustodyDepositAmount] = useState('100')
@@ -128,7 +131,7 @@ export function Employer() {
             const demoEmployees = prev.filter(emp => emp.id.startsWith('demo_'))
             const updatedDemoEmployees = demoEmployees.map(emp => ({
                 ...emp,
-                status: pausedEmployees[emp.id] ? 'paused' : 'active'
+                status: pausedEmployees[emp.id] ? 'paused' : 'active' as const
             }))
             return [...channelEmployees, ...updatedDemoEmployees] as EmployeeDisplay[]
         })
@@ -139,8 +142,6 @@ export function Employer() {
     useEffect(() => {
         employeesRef.current = employees
     }, [employees])
-
-
 
     const handleAddEmployee = async () => {
         console.log("calling handleAddEmployee")
@@ -164,6 +165,7 @@ export function Employer() {
             setNewEmployee('')
             setDepositAmount('1000')
             setRatePerMinute('0.75')
+            setShowAddModal(false)
         } catch (err) {
             console.error('Failed to create channel:', err)
         } finally {
@@ -307,12 +309,31 @@ export function Employer() {
     const activeStreams = employees.filter(e => e.status === 'active').length
     const custodyBalance = Number(yellowBalance) / 1e6 // Convert from USDC units
 
+    // Calculate balance percentage for progress bar
+    const getBalancePercent = (emp: EmployeeDisplay) => {
+        const total = emp.currentBalance + emp.totalPaid
+        if (total === 0) return 0
+        return Math.min(100, (emp.currentBalance / total) * 100)
+    }
+
+    const isLowBalance = (emp: EmployeeDisplay) => {
+        return getBalancePercent(emp) < 30
+    }
+
+    const filteredEmployees = employees.filter(emp =>
+        emp.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        emp.address.toLowerCase().includes(searchTerm.toLowerCase())
+    )
+
     if (!walletConnected) {
         return (
-            <div className="employer-page">
-                <div className="connect-prompt card">
-                    <h2>Connect Wallet</h2>
-                    <p className="text-secondary mt-md mb-lg">
+            <div className="min-h-screen flex items-center justify-center px-4 bg-background-dark">
+                <div className="bg-[#1a2e1e] border border-[#28392c] rounded-xl p-8 text-center max-w-md">
+                    <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-6">
+                        <span className="material-symbols-outlined text-primary text-3xl">account_balance_wallet</span>
+                    </div>
+                    <h2 className="text-2xl font-bold text-white mb-3">Connect Wallet</h2>
+                    <p className="text-slate-400 mb-6">
                         Connect your wallet to start streaming salaries to your team.
                     </p>
                     <ConnectButton />
@@ -322,274 +343,458 @@ export function Employer() {
     }
 
     return (
-        <div className="employer-page">
-            <header className="page-header">
-                <div>
-                    <h1>Employer Dashboard</h1>
-                    <p className="text-secondary">
-                        Stream salaries via Yellow Network state channels
-                    </p>
-                </div>
-                <div className="header-stats">
-                    <div className="stat-box">
-                        <span className="stat-label">Yellow Network</span>
-                        <span className={`stat-value ${yellowConnected ? 'text-success' : 'text-warning'}`}>
-                            {isConnecting ? 'Connecting...' : yellowConnected ? 'Connected' : 'Disconnected'}
-                        </span>
-                    </div>
-                    <div className="stat-box">
-                        <span className="stat-label">Total Deposited</span>
-                        <span className="stat-value">${totalDeposited.toFixed(2)}</span>
-                    </div>
-                    <div className="stat-box">
-                        <span className="stat-label">Active Streams</span>
-                        <span className="stat-value text-success">{activeStreams}</span>
-                    </div>
-                </div>
-            </header>
-
-            {error && (
-                <div className="error-banner">
-                    ⚠️ {error.message}
-                </div>
-            )}
-
-            {/* Deposit to Yellow Network Section */}
-            <section className="deposit-section card">
-                <h3>💰 Deposit to Yellow Network</h3>
-                <p className="text-secondary mb-md">
-                    Deposit USDC from your wallet to Yellow Network custody. These funds can then be allocated to payment channels.
-                </p>
-                <div className="deposit-info">
-                    <div className="balance-display">
-                        <span className="label">Wallet Balance:</span>
-                        <span className="value">${(Number(walletBalance) / 1e6).toFixed(2)} ytest.usd</span>
-                    </div>
-                    <div className="balance-display">
-                        <span className="label">Custody Balance:</span>
-                        <span className="value">${custodyBalance.toFixed(2)} ytest.usd</span>
-                        <span className="text-secondary text-sm ml-sm">(Sandbox)</span>
-                    </div>
-                </div>
-                <div className="deposit-form">
-                    <div className="form-row">
-                        <div className="form-group">
-                            <label className="label">Amount (ytest.usd)</label>
-                            <input
-                                type="number"
-                                className="input"
-                                placeholder="100"
-                                value={custodyDepositAmount}
-                                onChange={(e) => setCustodyDepositAmount(e.target.value)}
-                                min="0"
-                                step="any"
-                            />
-                        </div>
-                        <button
-                            className="btn btn-primary"
-                            onClick={handleDeposit}
-                            disabled={isDepositing || !yellowConnected}
-                        >
-                            {isDepositing ? 'Depositing...' : 'Deposit ytest.usd'}
-                        </button>
-                    </div>
-                    <p className="text-secondary text-sm mt-sm">
-                        ⚠️ Deposits use <b>ytest.usd</b> in Sandbox. In production, this will use <b>USDC</b> on Mainnet.
-                    </p>
-                </div>
-
-                <div className="deposit-form mt-lg pt-md border-top">
-                    <h4>Withdraw Funds</h4>
-                    <div className="form-row">
-                        <div className="form-group">
-                            <label className="label">Amount (ytest.usd)</label>
-                            <input
-                                type="number"
-                                className="input"
-                                placeholder="100"
-                                value={custodyWithdrawAmount}
-                                onChange={(e) => setCustodyWithdrawAmount(e.target.value)}
-                                min="0"
-                                step="any"
-                            />
-                        </div>
-                        <button
-                            className="btn btn-secondary"
-                            onClick={handleWithdraw}
-                            disabled={isWithdrawing || !yellowConnected}
-                        >
-                            {isWithdrawing ? 'Withdrawing...' : 'Withdraw ytest.usd'}
-                        </button>
-                    </div>
-                </div>
-
-                <div className="deposit-form mt-lg pt-md border-top">
-                    <h4>🚰 Faucet (Testnet Only)</h4>
-                    <p className="text-secondary mb-sm">
-                        Need test tokens? Mint 1,000 <b>ytest.usd</b> for free to test the deposit flow.
-                    </p>
-                    <button
-                        className="btn btn-outline"
-                        onClick={handleMint}
-                        disabled={isMinting || !walletConnected}
-                    >
-                        {isMinting ? 'Minting...' : 'Mint 1,000 TEST USDC'}
-                    </button>
-                </div>
-            </section>
-
-            <section className="add-employee-section card">
-                <h3>Open Payment Channel</h3>
-                <p className="text-secondary mb-lg">
-                    Deposit USDC once, then stream payments gaslessly every minute.
-                </p>
-                <div className="add-employee-form">
-                    <div className="form-group">
-                        <label className="label">Employee Address or ENS</label>
-                        <div className="input-with-status">
-                            <input
-                                type="text"
-                                className={`input ${newEmployee && (isAddressValid ? 'valid' : 'invalid')}`}
-                                placeholder="maria.company.eth or 0x..."
-                                value={newEmployee}
-                                onChange={(e) => setNewEmployee(e.target.value)}
-                            />
-                            {isResolvingENS && (
-                                <span className="input-status resolving">Resolving...</span>
-                            )}
-                            {!isResolvingENS && newEmployee && isAddressValid && (
-                                <span className="input-status valid">✓</span>
-                            )}
-                            {!isResolvingENS && newEmployee && !isAddressValid && (
-                                <span className="input-status invalid">✗</span>
-                            )}
-                        </div>
-                        {resolvedAddress && resolvedEnsName && (
-                            <div className="resolved-address">
-                                <span className="ens-badge">{resolvedEnsName}</span>
-                                <span className="arrow">→</span>
-                                <span className="address">{resolvedAddress.slice(0, 10)}...{resolvedAddress.slice(-8)}</span>
+        <div className="bg-background-light dark:bg-background-dark text-slate-900 dark:text-slate-100 min-h-screen font-display">
+            {/* Main Container */}
+            <div className="flex flex-col min-h-screen">
+                {/* Navigation Bar */}
+                <header className="border-b border-slate-200 dark:border-emerald-900/50 bg-white/50 dark:bg-background-dark/50 backdrop-blur-md sticky top-0 z-50">
+                    <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between gap-4">
+                        <div className="flex items-center gap-8">
+                            <div className="flex items-center gap-2 text-primary">
+                                <span className="material-symbols-outlined text-3xl">account_balance_wallet</span>
+                                <h1 className="text-xl font-extrabold tracking-tight text-slate-900 dark:text-white uppercase">Nexus</h1>
                             </div>
-                        )}
-                        {resolvedAddress && !resolvedEnsName && newEmployee.includes('.') && (
-                            <div className="resolved-address">
-                                <span className="address">{resolvedAddress.slice(0, 10)}...{resolvedAddress.slice(-8)}</span>
+                            <nav className="hidden md:flex items-center gap-6">
+                                <Link className="text-sm font-semibold text-primary" to="/employer">Dashboard</Link>
+                                <Link className="text-sm font-medium text-slate-500 hover:text-primary transition-colors" to="#">Team</Link>
+                                <Link className="text-sm font-medium text-slate-500 hover:text-primary transition-colors" to="#" onClick={() => setShowTreasuryModal(true)}>Treasury</Link>
+                                <Link className="text-sm font-medium text-slate-500 hover:text-primary transition-colors" to="#">Audit Log</Link>
+                            </nav>
+                        </div>
+                        <div className="flex items-center gap-4 flex-1 justify-end">
+                            <div className="hidden lg:flex items-center bg-slate-100 dark:bg-emerald-950/30 rounded-lg px-3 py-1.5 border border-slate-200 dark:border-emerald-800/50">
+                                <span className="material-symbols-outlined text-sm text-slate-400">search</span>
+                                <input
+                                    className="bg-transparent border-none focus:ring-0 text-sm w-48 placeholder:text-slate-500"
+                                    placeholder="Search employees or ENS..."
+                                    type="text"
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                />
                             </div>
-                        )}
-                    </div>
-                    <div className="form-group">
-                        <label className="label">Deposit (USDC)</label>
-                        <input
-                            type="number"
-                            className="input"
-                            placeholder="1000"
-                            value={depositAmount}
-                            onChange={(e) => setDepositAmount(e.target.value)}
-                        />
-                    </div>
-                    <div className="form-group">
-                        <label className="label">Rate ($/min)</label>
-                        <input
-                            type="number"
-                            step="0.01"
-                            className="input"
-                            placeholder="0.75"
-                            value={ratePerMinute}
-                            onChange={(e) => setRatePerMinute(e.target.value)}
-                        />
-                    </div>
-                    <button
-                        className="btn btn-primary"
-                        onClick={handleAddEmployee}
-                        disabled={isOpening || !yellowConnected || !isAddressValid || isResolvingENS}
-                    >
-                        {isOpening ? 'Opening...' : isResolvingENS ? 'Resolving...' : 'Open Channel'}
-                    </button>
-                </div>
-            </section>
-
-            <section className="employees-section">
-                <h3>Active Payment Channels</h3>
-                {employees.length === 0 ? (
-                    <div className="empty-state card">
-                        <p className="text-secondary">
-                            No active channels yet. Open a payment channel to start streaming salaries.
-                        </p>
-                    </div>
-                ) : (
-                    <div className="employees-grid">
-                        {employees.map((emp) => (
-                            <div key={emp.id} className="employee-card card">
-                                <div className="employee-header">
-                                    <div className="employee-info">
-                                        <span className={`status-dot ${emp.status === 'active' ? 'active' : 'inactive'}`}></span>
-                                        <span className="employee-name">{emp.name}</span>
-                                    </div>
-                                    <span className={`status-badge ${emp.status}`}>
-                                        {emp.status}
-                                    </span>
-                                </div>
-
-                                <div className="employee-stats">
-                                    <div className="employee-stat">
-                                        <span className="label">Rate</span>
-                                        <span className="value">${emp.rate.toFixed(2)}/min</span>
-                                    </div>
-                                    <div className="employee-stat">
-                                        <span className="label">Channel Balance</span>
-                                        <span className="value">${emp.currentBalance.toFixed(2)}</span>
-                                    </div>
-                                    <div className="employee-stat">
-                                        <span className="label">Total Streamed</span>
-                                        <span className="value stream-counter-small">${emp.totalPaid.toFixed(2)}</span>
-                                    </div>
-                                </div>
-
-                                <div className="employee-actions">
-                                    <button className="btn btn-outline btn-sm">Top Up</button>
-                                    <button
-                                        className="btn btn-outline btn-sm"
-                                        onClick={() => handlePauseResume(emp.id, emp.status)}
-                                    >
-                                        {emp.status === 'active' ? 'Pause' : 'Resume'}
-                                    </button>
-                                    <button
-                                        className="btn btn-outline btn-sm"
-                                        style={{ color: '#ef4444' }}
-                                        onClick={() => handleCloseChannel(emp.channelId!)}
-                                    >
-                                        Settle & Close
-                                    </button>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    className="bg-primary text-background-dark px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-primary/90 transition-all"
+                                    onClick={() => setShowTreasuryModal(true)}
+                                >
+                                    <span className="material-symbols-outlined text-lg">add_circle</span>
+                                    Deposit USDC
+                                </button>
+                                <button className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-emerald-900/30 rounded-lg transition-colors">
+                                    <span className="material-symbols-outlined">notifications</span>
+                                </button>
+                                <div className="h-8 w-8 rounded-full bg-emerald-800 border border-primary/20 flex items-center justify-center overflow-hidden">
+                                    <ConnectButton />
                                 </div>
                             </div>
-                        ))}
+                        </div>
                     </div>
-                )}
-            </section>
+                </header>
+                {/* Main Content */}
+                <main className="max-w-7xl mx-auto px-4 py-8 w-full flex-1">
+                    {/* Dashboard Header */}
+                    <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10">
+                        <div>
+                            <div className="flex items-center gap-2 mb-2">
+                                <span className={`flex h-2 w-2 rounded-full ${yellowConnected ? 'bg-primary status-pulse' : 'bg-amber-500'}`}></span>
+                                <span className="text-xs font-bold uppercase tracking-widest text-primary/80">
+                                    {isConnecting ? 'Network Connecting...' : yellowConnected ? 'Real-time Stream Active' : 'Connecting to Yellow...'}
+                                </span>
+                            </div>
+                            <h2 className="text-4xl font-black tracking-tight text-slate-900 dark:text-white">Employer Dashboard</h2>
+                            <p className="text-slate-500 dark:text-emerald-500/60 mt-2 max-w-xl">
+                                Managing global payroll via Circle's Arc and Yellow state channels. Zero-gas micro-transactions enabled.
+                            </p>
+                        </div>
+                        <div className="flex gap-3">
+                            <button className="flex-1 md:flex-none px-6 py-2.5 bg-slate-100 dark:bg-emerald-900/20 border border-slate-200 dark:border-emerald-800/50 rounded-lg font-bold text-sm hover:border-primary/50 transition-all">
+                                View Analytics
+                            </button>
+                            <button
+                                className="flex-1 md:flex-none px-6 py-2.5 bg-slate-900 dark:bg-primary text-white dark:text-background-dark rounded-lg font-bold text-sm hover:opacity-90 transition-all"
+                                onClick={() => setShowAddModal(true)}
+                            >
+                                Add New Employee
+                            </button>
+                        </div>
+                    </div>
 
-            {/* Demo Section - for testing without wallet */}
-            <section className="demo-section card mt-xl">
-                <h3>🧪 Demo Mode</h3>
-                <p className="text-secondary mb-md">
-                    Test the UI with simulated channel (no wallet required)
-                </p>
-                <button
-                    className="btn btn-secondary"
-                    onClick={() => {
-                        setEmployees([...employees, {
-                            id: `demo_${Date.now()}`,
-                            name: 'demo.worker.eth',
-                            address: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE2D',
-                            rate: 0.75,
-                            status: 'active',
-                            totalPaid: 1847.32,
-                            currentBalance: 1152.68,
-                        }])
-                    }}
-                >
-                    Add Demo Employee
-                </button>
-            </section>
-        </div>
+                    {error && (
+                        <div className={`mb-6 p-4 rounded-xl border flex items-center gap-3 animate-slideUp ${error.message?.includes('App Session not ready')
+                            ? 'bg-amber-500/10 border-amber-500/20 text-amber-500'
+                            : 'bg-red-500/10 border-red-500/20 text-red-500'
+                            }`}>
+                            <span className={`material-symbols-outlined ${error.message?.includes('App Session not ready') ? 'animate-spin' : ''
+                                }`}>
+                                {error.message?.includes('App Session not ready') ? 'sync' : 'error'}
+                            </span>
+                            <div>
+                                <h4 className="font-bold text-sm">
+                                    {error.message?.includes('App Session not ready') ? 'Initializing Channel' : 'Action Failed'}
+                                </h4>
+                                <p className="text-xs opacity-90">{error.message}</p>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Stats Grid */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+                        <div className="bg-white dark:bg-emerald-950/20 border border-slate-200 dark:border-emerald-800/40 p-6 rounded-xl relative overflow-hidden group">
+                            <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                                <span className="material-symbols-outlined text-6xl">payments</span>
+                            </div>
+                            <p className="text-slate-500 dark:text-emerald-500/70 text-sm font-semibold mb-1">Total Monthly Payroll</p>
+                            <h3 className="text-3xl font-bold text-slate-900 dark:text-white">${totalDeposited.toFixed(2)}</h3>
+                            <div className="flex items-center gap-1 mt-2 text-primary text-sm font-bold">
+                                <span className="material-symbols-outlined text-sm">trending_up</span>
+                                <span>+12.4% vs last month</span>
+                            </div>
+                        </div>
+                        <div className="bg-white dark:bg-emerald-950/20 border border-slate-200 dark:border-emerald-800/40 p-6 rounded-xl relative overflow-hidden group">
+                            <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                                <span className="material-symbols-outlined text-6xl">ev_station</span>
+                            </div>
+                            <p className="text-slate-500 dark:text-emerald-500/70 text-sm font-semibold mb-1">Total Gas Saved (L2)</p>
+                            <h3 className="text-3xl font-bold text-slate-900 dark:text-white">2.41 ETH</h3>
+                            <div className="flex items-center gap-1 mt-2 text-primary text-sm font-bold">
+                                <span className="material-symbols-outlined text-sm">energy_savings_leaf</span>
+                                <span>85% efficiency gain</span>
+                            </div>
+                        </div>
+                        <div className="bg-white dark:bg-emerald-950/20 border border-slate-200 dark:border-emerald-800/40 p-6 rounded-xl relative overflow-hidden group">
+                            <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                                <span className="material-symbols-outlined text-6xl">group</span>
+                            </div>
+                            <p className="text-slate-500 dark:text-emerald-500/70 text-sm font-semibold mb-1">Active Streams</p>
+                            <h3 className="text-3xl font-bold text-slate-900 dark:text-white">{activeStreams} Freelancers</h3>
+                            <div className="flex items-center gap-1 mt-2 text-slate-400 text-sm font-medium">
+                                <span>{employees.length - activeStreams} pending/paused</span>
+                            </div>
+                        </div>
+                    </div>
+                    {/* Table Section */}
+                    <div className="bg-white dark:bg-emerald-950/10 border border-slate-200 dark:border-emerald-900/40 rounded-xl overflow-hidden shadow-sm">
+                        <div className="px-6 py-4 border-b border-slate-200 dark:border-emerald-900/40 flex items-center justify-between bg-slate-50/50 dark:bg-emerald-900/10">
+                            <h3 className="font-bold text-lg">Active Employee Streams</h3>
+                            <div className="flex gap-2">
+                                <button className="p-1.5 hover:bg-slate-200 dark:hover:bg-emerald-800/30 rounded">
+                                    <span className="material-symbols-outlined text-xl">filter_list</span>
+                                </button>
+                                <button className="p-1.5 hover:bg-slate-200 dark:hover:bg-emerald-800/30 rounded">
+                                    <span className="material-symbols-outlined text-xl">download</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div className="overflow-x-auto">
+                            {filteredEmployees.length === 0 ? (
+                                <div className="p-12 text-center text-slate-400">
+                                    No active streams found. Click "Add New Employee" to start.
+                                </div>
+                            ) : (
+                                <table className="w-full text-left border-collapse">
+                                    <thead>
+                                        <tr className="text-slate-500 dark:text-emerald-500/50 text-xs font-bold uppercase tracking-widest border-b border-slate-100 dark:border-emerald-900/20">
+                                            <th className="px-6 py-4">Employee</th>
+                                            <th className="px-6 py-4">ENS Handle</th>
+                                            <th className="px-6 py-4 text-center">Stream Rate</th>
+                                            <th className="px-6 py-4">Yellow Channel Balance</th>
+                                            <th className="px-6 py-4 text-right">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100 dark:divide-emerald-900/20">
+                                        {filteredEmployees.map((emp) => (
+                                            <tr key={emp.id} className="hover:bg-slate-50/50 dark:hover:bg-emerald-900/5 transition-colors">
+                                                <td className="px-6 py-5">
+                                                    <div className="flex items-center gap-3">
+                                                        <div className={`w-9 h-9 rounded-full flex items-center justify-center border-2 ${emp.status === 'active' ? 'border-primary/20 bg-primary/10' : 'border-slate-600 bg-slate-800'}`}>
+                                                            <span className="material-symbols-outlined text-sm">{emp.status === 'active' ? 'person' : 'pause'}</span>
+                                                        </div>
+                                                        <div>
+                                                            <p className="font-bold text-slate-900 dark:text-white">{emp.name}</p>
+                                                            <p className="text-xs text-slate-400">{emp.status === 'active' ? 'Streaming' : 'Paused'}</p>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td className="px-6 py-5">
+                                                    <span className="font-mono text-sm text-primary/80 bg-primary/5 px-2 py-1 rounded">
+                                                        {emp.name.includes('.') ? emp.name : `${emp.address.slice(0, 6)}...`}
+                                                    </span>
+                                                </td>
+                                                <td className="px-6 py-5 text-center">
+                                                    <span className="font-bold text-slate-900 dark:text-slate-200">${emp.rate.toFixed(2)}/min</span>
+                                                </td>
+                                                <td className="px-6 py-5">
+                                                    <div className="max-w-[200px]">
+                                                        <div className="flex justify-between text-xs mb-1.5">
+                                                            <span className={isLowBalance(emp) ? 'text-amber-500 flex items-center gap-1' : 'text-slate-400'}>
+                                                                {isLowBalance(emp) && <span className="material-symbols-outlined text-xs">warning</span>}
+                                                                {getBalancePercent(emp).toFixed(0)}% remaining
+                                                            </span>
+                                                            <span className="font-bold text-white">${emp.currentBalance.toFixed(0)} USDC</span>
+                                                        </div>
+                                                        <div className="w-full h-1.5 bg-slate-200 dark:bg-emerald-950 rounded-full overflow-hidden">
+                                                            <div className={`h-full rounded-full ${isLowBalance(emp) ? 'bg-amber-500' : 'bg-primary'}`} style={{ width: `${getBalancePercent(emp)}%` }}></div>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td className="px-6 py-5 text-right">
+                                                    <div className="flex justify-end gap-2">
+                                                        <button
+                                                            className="bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 px-3 py-1.5 rounded-lg text-sm font-bold transition-all"
+                                                            onClick={() => handlePauseResume(emp.id, emp.status)}
+                                                        >
+                                                            {emp.status === 'active' ? 'Pause' : 'Resume'}
+                                                        </button>
+                                                        <button
+                                                            className="bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 px-3 py-1.5 rounded-lg text-sm font-bold transition-all"
+                                                            onClick={() => emp.channelId && handleCloseChannel(emp.channelId)}
+                                                        >
+                                                            Close
+                                                        </button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            )}
+                        </div>
+                        <div className="px-6 py-4 border-t border-slate-100 dark:border-emerald-900/20 bg-slate-50/30 dark:bg-emerald-900/5 flex items-center justify-between">
+                            <p className="text-xs text-slate-500 font-medium">Showing {filteredEmployees.length} streams</p>
+                            <div className="flex gap-2">
+                                <button className="px-3 py-1 text-xs font-bold border border-slate-200 dark:border-emerald-800 rounded disabled:opacity-50" disabled>Previous</button>
+                                <button className="px-3 py-1 text-xs font-bold border border-slate-200 dark:border-emerald-800 rounded">Next</button>
+                            </div>
+                        </div>
+                    </div>
+                    {/* Quick Actions & Help */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-10">
+                        <div className="bg-gradient-to-br from-[#102215] to-[#1a3a22] p-1 rounded-xl">
+                            <div className="bg-background-dark p-6 rounded-[0.65rem] h-full">
+                                <h4 className="font-bold text-xl mb-4 flex items-center gap-2">
+                                    <span className="material-symbols-outlined text-primary">hub</span>
+                                    Network Health
+                                </h4>
+                                <div className="space-y-4">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-sm text-slate-400">Yellow State Channel</span>
+                                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${yellowConnected ? 'bg-primary/20 text-primary' : 'bg-amber-500/20 text-amber-500'}`}>
+                                            {yellowConnected ? 'Optimized' : 'Connecting...'}
+                                        </span>
+                                    </div>
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-sm text-slate-400">Circle Arc Gateway</span>
+                                        <span className="text-xs font-bold px-2 py-0.5 bg-primary/20 text-primary rounded-full">Connected</span>
+                                    </div>
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-sm text-slate-400">Settlement Delay (L1)</span>
+                                        <span className="text-xs font-bold px-2 py-0.5 bg-slate-800 text-slate-300 rounded-full">~12 min</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="bg-white dark:bg-emerald-950/20 border border-primary/20 p-6 rounded-xl relative overflow-hidden group">
+                            <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                            <div className="relative z-10">
+                                <h4 className="font-bold text-xl mb-4 text-slate-900 dark:text-white">Smart Top-up</h4>
+                                <p className="text-sm text-slate-600 dark:text-emerald-500/70 mb-6">
+                                    Automatically replenish state channel balances from your treasury when they fall below 10 hours of remaining work.
+                                </p>
+                                <div className="flex items-center gap-3">
+                                    <div className="relative inline-block w-12 h-6 rounded-full bg-slate-200 dark:bg-emerald-900/50 cursor-pointer">
+                                        <div className="absolute left-1 top-1 bg-white dark:bg-primary w-4 h-4 rounded-full transition-all translate-x-6"></div>
+                                    </div>
+                                    <span className="text-sm font-bold text-slate-700 dark:text-slate-200">Enable Automation</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </main>
+                {/* Footer */}
+                <footer className="mt-12 border-t border-slate-200 dark:border-emerald-900/50 py-8 bg-white dark:bg-background-dark">
+                    <div className="max-w-7xl mx-auto px-4 flex flex-col md:flex-row justify-between items-center gap-6">
+                        <div className="flex items-center gap-4">
+                            <div className="flex items-center gap-2 opacity-50">
+                                <span className="material-symbols-outlined text-xl">account_balance_wallet</span>
+                                <span className="text-sm font-bold uppercase tracking-tight">Nexus Dashboard</span>
+                            </div>
+                            <p className="text-xs text-slate-400">© 2026 StreamWork Protocol. All rights reserved.</p>
+                        </div>
+                        <div className="flex gap-6">
+                            <Link className="text-xs text-slate-400 hover:text-primary transition-colors" to="#">Documentation</Link>
+                            <Link className="text-xs text-slate-400 hover:text-primary transition-colors" to="#">API Keys</Link>
+                            <Link className="text-xs text-slate-400 hover:text-primary transition-colors" to="#">Status</Link>
+                        </div>
+                    </div>
+                </footer >
+            </div >
+
+            {/* Treasury Modal (New) */}
+            {
+                showTreasuryModal && (
+                    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+                        <div className="bg-card-dark border border-border-dark rounded-xl p-6 w-full max-w-2xl text-white">
+                            <div className="flex items-center justify-between mb-6">
+                                <h3 className="text-xl font-bold flex items-center gap-2">
+                                    <span className="material-symbols-outlined text-primary">account_balance</span>
+                                    Yellow Network Treasury
+                                </h3>
+                                <button
+                                    className="text-slate-400 hover:text-white"
+                                    onClick={() => setShowTreasuryModal(false)}
+                                >
+                                    <span className="material-symbols-outlined">close</span>
+                                </button>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                <div className="space-y-6">
+                                    <div className="p-4 bg-background-dark/50 rounded-lg border border-border-dark">
+                                        <p className="text-slate-400 text-sm mb-1">Custody Balance</p>
+                                        <p className="text-2xl font-bold text-primary">${custodyBalance.toFixed(2)}</p>
+                                        <p className="text-xs text-slate-500 mt-1">Available for new channels</p>
+                                    </div>
+                                    <div className="p-4 bg-background-dark/50 rounded-lg border border-border-dark">
+                                        <p className="text-slate-400 text-sm mb-1">Wallet Balance</p>
+                                        <p className="text-2xl font-bold text-white">${(Number(walletBalance) / 1e6).toFixed(2)}</p>
+                                        <p className="text-xs text-slate-500 mt-1">ytest.usd in MetaMask</p>
+                                    </div>
+                                </div>
+
+                                <div className="space-y-6">
+                                    {/* Deposit */}
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-semibold">Deposit to Treasury</label>
+                                        <div className="flex gap-2">
+                                            <input
+                                                type="number"
+                                                className="flex-1 bg-background-dark border border-border-dark rounded-lg px-3 py-2 text-sm focus:border-primary focus:outline-none"
+                                                placeholder="Amount"
+                                                value={custodyDepositAmount}
+                                                onChange={(e) => setCustodyDepositAmount(e.target.value)}
+                                            />
+                                            <button
+                                                className="px-3 py-2 bg-primary text-background-dark rounded-lg text-sm font-bold hover:opacity-90 disabled:opacity-50"
+                                                onClick={handleDeposit}
+                                                disabled={isDepositing || !yellowConnected}
+                                            >
+                                                {isDepositing ? '...' : 'Deposit'}
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {/* Withdraw */}
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-semibold">Withdraw to Wallet</label>
+                                        <div className="flex gap-2">
+                                            <input
+                                                type="number"
+                                                className="flex-1 bg-background-dark border border-border-dark rounded-lg px-3 py-2 text-sm focus:border-primary focus:outline-none"
+                                                placeholder="Amount"
+                                                value={custodyWithdrawAmount}
+                                                onChange={(e) => setCustodyWithdrawAmount(e.target.value)}
+                                            />
+                                            <button
+                                                className="px-3 py-2 bg-transparent border border-border-dark text-white rounded-lg text-sm font-bold hover:border-primary disabled:opacity-50"
+                                                onClick={handleWithdraw}
+                                                disabled={isWithdrawing || !yellowConnected}
+                                            >
+                                                {isWithdrawing ? '...' : 'Withdraw'}
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {/* Faucet */}
+                                    <div className="pt-4 border-t border-border-dark">
+                                        <button
+                                            className="w-full py-2 bg-transparent border border-dashed border-slate-600 text-slate-400 rounded-lg text-sm hover:text-white hover:border-slate-400 flex items-center justify-center gap-2"
+                                            onClick={handleMint}
+                                            disabled={isMinting || !walletConnected}
+                                        >
+                                            <span className="material-symbols-outlined text-sm">water_drop</span>
+                                            {isMinting ? 'Minting...' : 'Mint Test Tokens (Faucet)'}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )
+            }
+
+            {/* Add Employee Modal */}
+            {
+                showAddModal && (
+                    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+                        <div className="bg-card-dark border border-border-dark rounded-xl p-6 w-full max-w-md text-white">
+                            <div className="flex items-center justify-between mb-6">
+                                <h3 className="text-xl font-bold">Open Payment Channel</h3>
+                                <button
+                                    className="text-slate-400 hover:text-white"
+                                    onClick={() => setShowAddModal(false)}
+                                >
+                                    <span className="material-symbols-outlined">close</span>
+                                </button>
+                            </div>
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="text-slate-400 text-sm font-semibold block mb-2">Employee Address or ENS</label>
+                                    <div className="relative">
+                                        <input
+                                            type="text"
+                                            className={`w-full bg-background-dark border rounded-lg px-4 py-3 text-white focus:outline-none ${newEmployee && (isAddressValid ? 'border-primary' : 'border-red-500')}`}
+                                            placeholder="maria.company.eth or 0x..."
+                                            value={newEmployee}
+                                            onChange={(e) => setNewEmployee(e.target.value)}
+                                        />
+                                        {isResolvingENS && (
+                                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">Resolving...</span>
+                                        )}
+                                        {!isResolvingENS && newEmployee && isAddressValid && (
+                                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-primary">✓</span>
+                                        )}
+                                    </div>
+                                    {resolvedAddress && resolvedEnsName && (
+                                        <div className="mt-2 text-sm">
+                                            <span className="text-primary">{resolvedEnsName}</span>
+                                            <span className="text-slate-500 mx-2">→</span>
+                                            <span className="text-slate-400 font-mono">{resolvedAddress.slice(0, 10)}...{resolvedAddress.slice(-8)}</span>
+                                        </div>
+                                    )}
+                                </div>
+                                <div>
+                                    <label className="text-slate-400 text-sm font-semibold block mb-2">Initial Deposit (USDC)</label>
+                                    <input
+                                        type="number"
+                                        className="w-full bg-background-dark border border-border-dark rounded-lg px-4 py-3 text-white focus:border-primary focus:outline-none"
+                                        placeholder="1000"
+                                        value={depositAmount}
+                                        onChange={(e) => setDepositAmount(e.target.value)}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="text-slate-400 text-sm font-semibold block mb-2">Rate ($/min)</label>
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        className="w-full bg-background-dark border border-border-dark rounded-lg px-4 py-3 text-white focus:border-primary focus:outline-none"
+                                        placeholder="0.75"
+                                        value={ratePerMinute}
+                                        onChange={(e) => setRatePerMinute(e.target.value)}
+                                    />
+                                </div>
+                                <button
+                                    className="w-full mt-4 py-3 bg-primary text-background-dark rounded-lg font-bold hover:opacity-90 transition-all disabled:opacity-50"
+                                    onClick={handleAddEmployee}
+                                    disabled={isOpening || !yellowConnected || !isAddressValid || isResolvingENS}
+                                >
+                                    {isOpening ? 'Opening Channel...' : isResolvingENS ? 'Resolving...' : 'Open Channel'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )
+            }
+        </div >
     )
 }

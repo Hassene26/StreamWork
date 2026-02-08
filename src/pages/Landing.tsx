@@ -1,108 +1,104 @@
 import { Link } from 'react-router-dom'
-import './Landing.css'
 
 export function Landing() {
     return (
-        <div className="landing">
-            <section className="hero">
-                <div className="hero-content animate-slideUp">
-                    <div className="hero-badge">
-                        <span className="badge-icon">🚀</span>
-                        <span>HackMoney 2026</span>
+        <div className="min-h-screen flex flex-col">
+            {/* Hero Section */}
+            <main className="flex-1 flex flex-col items-center justify-center px-4 py-12">
+                {/* Logo and Branding */}
+                <div className="flex items-center gap-3 mb-8">
+                    <div className="w-10 h-10 text-primary">
+                        <svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M42.4379 44C42.4379 44 36.0744 33.9038 41.1692 24C46.8624 12.9336 42.2078 4 42.2078 4L7.01134 4C7.01134 4 11.6577 12.932 5.96912 23.9969C0.876273 33.9029 7.27094 44 7.27094 44L42.4379 44Z" fill="currentColor"></path>
+                        </svg>
                     </div>
+                    <h1 className="text-3xl font-extrabold text-white tracking-tight">StreamWork</h1>
+                </div>
 
-                    <h1 className="hero-title">
-                        Stream Salaries in <span className="gradient-text">Real-Time</span>
-                    </h1>
+                {/* Tagline */}
+                <p className="text-slate-400 text-lg text-center max-w-lg mb-12">
+                    Real-time salary streaming via state channels.
+                    <span className="text-primary"> Zero gas. Instant payments.</span>
+                </p>
 
-                    <p className="hero-subtitle">
-                        Pay remote workers per minute using state channels.
-                        No gas fees. No delays. No bank intermediaries.
-                    </p>
+                {/* Role Selection Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-3xl">
+                    {/* Employer Card */}
+                    <Link
+                        to="/employer"
+                        className="group bg-card-dark border border-border-dark hover:border-primary/50 rounded-xl p-8 transition-all duration-300 hover:shadow-[0_0_30px_rgba(19,236,73,0.15)]"
+                    >
+                        <div className="flex flex-col items-center text-center">
+                            <div className="w-20 h-20 bg-primary/10 rounded-full flex items-center justify-center mb-6 group-hover:bg-primary/20 transition-colors">
+                                <span className="material-symbols-outlined text-primary text-4xl">business</span>
+                            </div>
+                            <h2 className="text-2xl font-bold text-white mb-3">I'm an Employer</h2>
+                            <p className="text-slate-400 text-sm mb-6">
+                                Stream real-time payments to your remote team.
+                                Manage payroll with state channels.
+                            </p>
+                            <div className="flex items-center gap-2 text-primary font-semibold">
+                                <span>Open Dashboard</span>
+                                <span className="material-symbols-outlined text-lg group-hover:translate-x-1 transition-transform">arrow_forward</span>
+                            </div>
+                        </div>
+                    </Link>
 
-                    <div className="hero-stats">
-                        <div className="stat">
-                            <span className="stat-value">$0</span>
-                            <span className="stat-label">Gas per payment</span>
+                    {/* Employee Card */}
+                    <Link
+                        to="/employee"
+                        className="group bg-card-dark border border-border-dark hover:border-primary/50 rounded-xl p-8 transition-all duration-300 hover:shadow-[0_0_30px_rgba(19,236,73,0.15)]"
+                    >
+                        <div className="flex flex-col items-center text-center">
+                            <div className="w-20 h-20 bg-primary/10 rounded-full flex items-center justify-center mb-6 group-hover:bg-primary/20 transition-colors">
+                                <span className="material-symbols-outlined text-primary text-4xl">person</span>
+                            </div>
+                            <h2 className="text-2xl font-bold text-white mb-3">I'm an Employee</h2>
+                            <p className="text-slate-400 text-sm mb-6">
+                                Receive earnings in real-time.
+                                Withdraw instantly to your bank.
+                            </p>
+                            <div className="flex items-center gap-2 text-primary font-semibold">
+                                <span>View Earnings</span>
+                                <span className="material-symbols-outlined text-lg group-hover:translate-x-1 transition-transform">arrow_forward</span>
+                            </div>
                         </div>
-                        <div className="stat">
-                            <span className="stat-value">60x</span>
-                            <span className="stat-label">Payments/hour</span>
-                        </div>
-                        <div className="stat">
-                            <span className="stat-value">0%</span>
-                            <span className="stat-label">Hidden fees</span>
-                        </div>
+                    </Link>
+                </div>
+
+                {/* Features Grid */}
+                <div className="mt-16 grid grid-cols-3 gap-8 max-w-2xl">
+                    <div className="text-center">
+                        <div className="text-3xl font-bold text-white mb-1">$0</div>
+                        <div className="text-xs text-slate-500 uppercase tracking-wider">Gas per payment</div>
                     </div>
-
-                    <div className="hero-actions">
-                        <Link to="/employer" className="btn btn-primary btn-lg">
-                            Start Streaming Salary
-                        </Link>
-                        <Link to="/employee" className="btn btn-outline btn-lg">
-                            Receive Payments
-                        </Link>
+                    <div className="text-center">
+                        <div className="text-3xl font-bold text-white mb-1">60x</div>
+                        <div className="text-xs text-slate-500 uppercase tracking-wider">Payments/hour</div>
+                    </div>
+                    <div className="text-center">
+                        <div className="text-3xl font-bold text-primary mb-1">Instant</div>
+                        <div className="text-xs text-slate-500 uppercase tracking-wider">Bank withdrawals</div>
                     </div>
                 </div>
 
-                <div className="hero-visual">
-                    <div className="stream-demo">
-                        <div className="stream-demo-label">Money Streaming Live</div>
-                        <div className="stream-counter">$1,847.32</div>
-                        <div className="stream-rate">+$0.75/min</div>
-                        <div className="stream-particles">
-                            {[...Array(5)].map((_, i) => (
-                                <div key={i} className="particle" style={{ animationDelay: `${i * 0.2}s` }} />
-                            ))}
-                        </div>
+                {/* Tech Stack */}
+                <div className="mt-16 flex items-center gap-6 text-slate-500 text-sm">
+                    <span>Powered by</span>
+                    <div className="flex items-center gap-4">
+                        <span className="text-white font-semibold">Yellow Network</span>
+                        <span className="text-border-dark">•</span>
+                        <span className="text-white font-semibold">Circle Arc</span>
+                        <span className="text-border-dark">•</span>
+                        <span className="text-white font-semibold">ENS</span>
                     </div>
                 </div>
-            </section>
+            </main>
 
-            <section className="features">
-                <h2 className="text-center mb-xl">How It Works</h2>
-                <div className="grid grid-3">
-                    <div className="card feature-card">
-                        <div className="feature-icon">💰</div>
-                        <h3>Deposit Once</h3>
-                        <p className="text-secondary">
-                            Employer deposits USDC into a state channel. One gas fee, then unlimited payments.
-                        </p>
-                    </div>
-                    <div className="card feature-card">
-                        <div className="feature-icon">⚡</div>
-                        <h3>Stream Per Minute</h3>
-                        <p className="text-secondary">
-                            Every minute, a cryptographic signature updates the balance. No blockchain needed.
-                        </p>
-                    </div>
-                    <div className="card feature-card">
-                        <div className="feature-icon">🏦</div>
-                        <h3>Withdraw Anytime</h3>
-                        <p className="text-secondary">
-                            Employee withdraws accumulated earnings to their bank via Circle's Bridge Kit.
-                        </p>
-                    </div>
-                </div>
-            </section>
-
-            <section className="tech-stack">
-                <h2 className="text-center mb-xl">Built With</h2>
-                <div className="tech-logos">
-                    <div className="tech-item">
-                        <div className="tech-name">Yellow Network</div>
-                        <div className="tech-desc">State Channels</div>
-                    </div>
-                    <div className="tech-item">
-                        <div className="tech-name">Circle Arc</div>
-                        <div className="tech-desc">Wallets & Offramp</div>
-                    </div>
-                    <div className="tech-item">
-                        <div className="tech-name">ENS</div>
-                        <div className="tech-desc">Human Addresses</div>
-                    </div>
-                </div>
-            </section>
+            {/* Footer */}
+            <footer className="py-6 text-center text-slate-500 text-xs">
+                <p>© 2026 StreamWork Protocol. Built for ETHGlobal HackMoney.</p>
+            </footer>
         </div>
     )
 }

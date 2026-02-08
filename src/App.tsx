@@ -2,7 +2,9 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { Landing } from './pages/Landing'
 import { Employer } from './pages/Employer'
 import { Employee } from './pages/Employee'
-import { Header } from './components/Header'
+import { Withdrawal } from './pages/Withdrawal'
+import { Settings } from './pages/Settings'
+
 import { validateEnv, env } from './config/env'
 import { circleService } from './services/circle'
 
@@ -20,12 +22,14 @@ function App() {
     return (
         <BrowserRouter>
             <div className="app">
-                <Header />
+
                 <main className="main-content">
                     <Routes>
                         <Route path="/" element={<Landing />} />
                         <Route path="/employer" element={<Employer />} />
                         <Route path="/employee" element={<Employee />} />
+                        <Route path="/withdrawal" element={<Withdrawal />} />
+                        <Route path="/settings" element={<Settings />} />
                     </Routes>
                 </main>
             </div>
@@ -34,3 +38,4 @@ function App() {
 }
 
 export default App
+
