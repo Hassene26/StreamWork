@@ -358,7 +358,7 @@ export function Employer() {
                         <div className="flex items-center gap-8">
                             <div className="flex items-center gap-2 text-primary">
                                 <span className="material-symbols-outlined text-3xl">account_balance_wallet</span>
-                                <h1 className="text-xl font-extrabold tracking-tight text-slate-900 dark:text-white uppercase">Nexus</h1>
+                                <h1 className="text-xl font-extrabold tracking-tight text-slate-900 dark:text-white uppercase">StreamWork</h1>
                             </div>
                             <nav className="hidden md:flex items-center gap-6">
                                 <Link className="text-sm font-semibold text-primary" to="/employer">Dashboard</Link>
@@ -621,7 +621,7 @@ export function Employer() {
                         <div className="flex items-center gap-4">
                             <div className="flex items-center gap-2 opacity-50">
                                 <span className="material-symbols-outlined text-xl">account_balance_wallet</span>
-                                <span className="text-sm font-bold uppercase tracking-tight">Nexus Dashboard</span>
+                                <span className="text-sm font-bold uppercase tracking-tight">StreamWork Dashboard</span>
                             </div>
                             <p className="text-xs text-slate-400">© 2026 StreamWork Protocol. All rights reserved.</p>
                         </div>

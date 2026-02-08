@@ -14,8 +14,6 @@ export function Settings() {
     // State management
     const [linkedEns, setLinkedEns] = useState<string | null>(null)
     const [preferredStablecoin, setPreferredStablecoin] = useState('USDC')
-    const [taxJurisdiction, setTaxJurisdiction] = useState('BR')
-    const [autoTax, setAutoTax] = useState(true)
 
     // Load linked ENS when address changes
     useEffect(() => {

@@ -2,7 +2,6 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { useCircleWallet } from '../hooks/useCircleWallet'
 import { useENSProfile } from '../hooks/useENS'
-import { resolveENSName, isENSName } from '../services/ens'
 import { backendApi } from '../api/backend'
 import { BridgeModal } from '../components/BridgeModal'
 
@@ -33,9 +32,6 @@ export function Employee() {
 
     // ENS linking
     const [linkedEns, setLinkedEns] = useState<string | null>(null)
-    const [ensInput, setEnsInput] = useState('')
-    const [isLinkingEns, setIsLinkingEns] = useState(false)
-    const [ensLinkError, setEnsLinkError] = useState<string | null>(null)
 
     // Load linked ENS when address changes
     useEffect(() => {
@@ -49,7 +45,7 @@ export function Employee() {
     const [ensRegStatus, setEnsRegStatus] = useState<'idle' | 'committing' | 'waiting' | 'registering' | 'complete' | 'error'>('idle')
     const [ensRegError, setEnsRegError] = useState<string | null>(null)
     const [ensCountdown, setEnsCountdown] = useState(0)
-    const [showLinkExisting, setShowLinkExisting] = useState(false)
+
     const availabilityTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
     const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -62,7 +58,6 @@ export function Employee() {
     // Transaction status tracking
     const [txStatus, setTxStatus] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null)
     const [isBridgeModalOpen, setIsBridgeModalOpen] = useState(false)
-    const [copiedAddress, setCopiedAddress] = useState(false)
 
     // Simulated live earnings (for demo effect)
     const [liveEarnings, setLiveEarnings] = useState(0)
@@ -89,52 +84,6 @@ export function Employee() {
             return () => clearTimeout(timer)
         }
     }, [txStatus])
-
-    // Copy address/ENS to clipboard
-    const copyAddress = async () => {
-        const textToCopy = linkedEns || circleAddress
-        if (textToCopy) {
-            await navigator.clipboard.writeText(textToCopy)
-            setCopiedAddress(true)
-            setTimeout(() => setCopiedAddress(false), 2000)
-        }
-    }
-
-    const handleLinkENS = async () => {
-        if (!ensInput) return
-        setIsLinkingEns(true)
-        setEnsLinkError(null)
-
-        try {
-            if (!isENSName(ensInput)) {
-                setEnsLinkError('Please enter a valid ENS name (e.g. name.eth)')
-                return
-            }
-
-            const resolved = await resolveENSName(ensInput)
-            if (!resolved) {
-                setEnsLinkError('ENS name could not be resolved')
-                return
-            }
-
-            if (circleAddress) {
-                setLinkedENSStorage(circleAddress, ensInput)
-            }
-            setLinkedEns(ensInput)
-            setEnsInput('')
-            setShowLinkExisting(false) // Close modal on success
-        } catch (err) {
-            console.error('Failed to link ENS:', err)
-            setEnsLinkError('Failed to link ENS name')
-        } finally {
-            setIsLinkingEns(false)
-        }
-    }
-
-    const handleUnlinkENS = () => {
-        setLinkedEns(null)
-        clearLinkedENSStorage()
-    }
 
     // Debounced availability check
     const checkAvailability = useCallback((label: string) => {
@@ -345,7 +294,7 @@ export function Employee() {
                         </div>
                         <div className="hidden md:flex items-center gap-6">
                             <Link className="text-slate-400 hover:text-primary text-sm font-medium transition-colors" to="/employee">Dashboard</Link>
-                            <Link className="text-slate-400 hover:text-primary text-sm font-medium transition-colors" to="/settings">Network</Link>
+                            <Link className="text-slate-400 hover:text-primary text-sm font-medium transition-colors" to="/settings">Settings</Link>
                         </div>
                     </div>
                     <div className="flex items-center gap-4">
@@ -392,7 +341,7 @@ export function Employee() {
                                         <span className="text-primary text-4xl md:text-5xl font-bold ticker-font glow-green">{decimalPart}</span>
                                     </div>
                                     <p className="text-slate-400 text-sm mt-4 font-medium">
-                                        Secured by <span className="text-white">Yellow network</span>
+                                        Secured by <span className="text-white">Circle's Arc</span> via Ethereum Layer 2
                                     </p>
                                     <div className="mt-6 flex gap-3">
                                         <span className="bg-[#28392c] text-primary text-[10px] px-3 py-1 rounded-full border border-primary/20 font-bold uppercase">USD-C Stream</span>
@@ -400,10 +349,10 @@ export function Employee() {
                                     </div>
                                 </div>
                             </section>
-                            {/* Active Nexus Stream Card */}
+                            {/* Active StreamWork Stream Card */}
                             <section>
                                 <div className="flex items-center justify-between mb-4">
-                                    <h2 className="text-white text-xl font-bold">Active Nexus Stream</h2>
+                                    <h2 className="text-white text-xl font-bold">Active StreamWork Stream</h2>
                                     <button className="text-primary text-sm font-semibold hover:underline">View Contract Details</button>
                                 </div>
                                 <div className="bg-[#1a2e1e] border border-[#28392c] rounded-xl p-6">
@@ -413,7 +362,7 @@ export function Employee() {
                                                 <span className="material-symbols-outlined text-primary text-3xl">hub</span>
                                             </div>
                                             <div>
-                                                <h3 className="text-white font-bold text-lg">Global Web Design - Nexus #042</h3>
+                                                <h3 className="text-white font-bold text-lg">Global Web Design </h3>
                                                 <div className="flex items-center gap-2 mt-1">
                                                     <span className="size-2 rounded-full bg-primary active-pulse"></span>
                                                     <p className="text-primary text-xs font-bold">STREAM STATUS: ACTIVE</p>
@@ -482,7 +431,7 @@ export function Employee() {
                                     Wallet Operations
                                 </h3>
                                 <div className="mb-8">
-                                    <label className="text-slate-400 text-[10px] font-bold uppercase tracking-wider mb-2 block">Linked Payout Account (Mock)</label>
+                                    <label className="text-slate-400 text-[10px] font-bold uppercase tracking-wider mb-2 block">Linked Payout Account</label>
                                     <div className="flex items-center justify-between bg-black/30 p-4 rounded-lg border border-white/5">
                                         <div className="flex items-center gap-3">
                                             <div className="size-8 bg-blue-600 rounded flex items-center justify-center font-bold text-white text-[10px]">MP</div>

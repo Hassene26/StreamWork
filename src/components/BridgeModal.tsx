@@ -101,13 +101,6 @@ export function BridgeModal({
         setAmount(balance)
     }
 
-    // Use current Circle wallet as default destination
-    const useMyAddress = () => {
-        if (walletAddress) {
-            setDestinationAddress(walletAddress)
-        }
-    }
-
     return (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[1000] animate-in fade-in duration-200" onClick={handleClose}>
             <div
