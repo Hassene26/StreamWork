@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { useAccount } from 'wagmi'
+import { useAccount, useDisconnect } from 'wagmi'
 import { ConnectButton } from '../components/ConnectButton'
 import { useYellowChannel } from '../hooks/useYellowChannel'
-import { useResolveInput } from '../hooks/useENS'
+import { useResolveInput, useENSName } from '../hooks/useENS'
 import { yellowService } from '../services/yellow'
 
 interface EmployeeDisplay {
@@ -18,7 +18,9 @@ interface EmployeeDisplay {
 }
 
 export function Employer() {
-    const { isConnected: walletConnected } = useAccount()
+    const { isConnected: walletConnected, address } = useAccount()
+    const { disconnect } = useDisconnect()
+    const { name: ensName } = useENSName(address || null)
     const {
         isConnected: yellowConnected,
         isConnecting,
@@ -57,6 +59,9 @@ export function Employer() {
         isValid: isAddressValid,
         isLoading: isResolvingENS
     } = useResolveInput(newEmployee)
+
+    // ENS resolution for search term
+    const { address: searchResolvedAddress } = useResolveInput(searchTerm)
 
     // Debug helper: Expose checkCustodyBalance to window
     useEffect(() => {
@@ -322,7 +327,8 @@ export function Employer() {
 
     const filteredEmployees = employees.filter(emp =>
         emp.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        emp.address.toLowerCase().includes(searchTerm.toLowerCase())
+        emp.address.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (searchResolvedAddress && emp.address.toLowerCase() === searchResolvedAddress.toLowerCase())
     )
 
     if (!walletConnected) {
@@ -356,9 +362,7 @@ export function Employer() {
                             </div>
                             <nav className="hidden md:flex items-center gap-6">
                                 <Link className="text-sm font-semibold text-primary" to="/employer">Dashboard</Link>
-                                <Link className="text-sm font-medium text-slate-500 hover:text-primary transition-colors" to="#">Team</Link>
-                                <Link className="text-sm font-medium text-slate-500 hover:text-primary transition-colors" to="#" onClick={() => setShowTreasuryModal(true)}>Treasury</Link>
-                                <Link className="text-sm font-medium text-slate-500 hover:text-primary transition-colors" to="#">Audit Log</Link>
+                                <Link className="text-sm font-medium text-slate-500 hover:text-primary transition-colors" to="#" onClick={() => setShowTreasuryModal(true)}>Deposit to Channel</Link>
                             </nav>
                         </div>
                         <div className="flex items-center gap-4 flex-1 justify-end">
@@ -383,8 +387,16 @@ export function Employer() {
                                 <button className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-emerald-900/30 rounded-lg transition-colors">
                                     <span className="material-symbols-outlined">notifications</span>
                                 </button>
-                                <div className="h-8 w-8 rounded-full bg-emerald-800 border border-primary/20 flex items-center justify-center overflow-hidden">
-                                    <ConnectButton />
+                                <div
+                                    className="flex items-center gap-2 px-3 py-1.5 bg-slate-100 dark:bg-emerald-900/30 rounded-lg border border-slate-200 dark:border-emerald-800/50 cursor-pointer hover:bg-slate-200 dark:hover:bg-emerald-900/50 transition-colors"
+                                    onClick={() => disconnect()}
+                                >
+                                    <div className="h-6 w-6 rounded-full bg-gradient-to-tr from-emerald-500 to-primary flex items-center justify-center text-[10px] font-bold text-white shadow-sm">
+                                        {ensName ? ensName.slice(0, 2).toUpperCase() : (address ? address.slice(2, 4).toUpperCase() : '??')}
+                                    </div>
+                                    <span className="text-sm font-bold text-slate-700 dark:text-slate-200 hidden sm:block">
+                                        {ensName || (address ? `${address.slice(0, 6)}...${address.slice(-4)}` : '')}
+                                    </span>
                                 </div>
                             </div>
                         </div>
@@ -407,9 +419,6 @@ export function Employer() {
                             </p>
                         </div>
                         <div className="flex gap-3">
-                            <button className="flex-1 md:flex-none px-6 py-2.5 bg-slate-100 dark:bg-emerald-900/20 border border-slate-200 dark:border-emerald-800/50 rounded-lg font-bold text-sm hover:border-primary/50 transition-all">
-                                View Analytics
-                            </button>
                             <button
                                 className="flex-1 md:flex-none px-6 py-2.5 bg-slate-900 dark:bg-primary text-white dark:text-background-dark rounded-lg font-bold text-sm hover:opacity-90 transition-all"
                                 onClick={() => setShowAddModal(true)}
@@ -447,14 +456,14 @@ export function Employer() {
                             <h3 className="text-3xl font-bold text-slate-900 dark:text-white">${totalDeposited.toFixed(2)}</h3>
                             <div className="flex items-center gap-1 mt-2 text-primary text-sm font-bold">
                                 <span className="material-symbols-outlined text-sm">trending_up</span>
-                                <span>+12.4% vs last month</span>
+                                <span>+12.4% vs last month (Mock)</span>
                             </div>
                         </div>
                         <div className="bg-white dark:bg-emerald-950/20 border border-slate-200 dark:border-emerald-800/40 p-6 rounded-xl relative overflow-hidden group">
                             <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
                                 <span className="material-symbols-outlined text-6xl">ev_station</span>
                             </div>
-                            <p className="text-slate-500 dark:text-emerald-500/70 text-sm font-semibold mb-1">Total Gas Saved (L2)</p>
+                            <p className="text-slate-500 dark:text-emerald-500/70 text-sm font-semibold mb-1">Total Gas Saved (Mock)</p>
                             <h3 className="text-3xl font-bold text-slate-900 dark:text-white">2.41 ETH</h3>
                             <div className="flex items-center gap-1 mt-2 text-primary text-sm font-bold">
                                 <span className="material-symbols-outlined text-sm">energy_savings_leaf</span>
@@ -571,7 +580,7 @@ export function Employer() {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-10">
                         <div className="bg-gradient-to-br from-[#102215] to-[#1a3a22] p-1 rounded-xl">
                             <div className="bg-background-dark p-6 rounded-[0.65rem] h-full">
-                                <h4 className="font-bold text-xl mb-4 flex items-center gap-2">
+                                <h4 className="font-bold text-xl mb-4 flex items-center gap-2 text-white">
                                     <span className="material-symbols-outlined text-primary">hub</span>
                                     Network Health
                                 </h4>
@@ -586,17 +595,13 @@ export function Employer() {
                                         <span className="text-sm text-slate-400">Circle Arc Gateway</span>
                                         <span className="text-xs font-bold px-2 py-0.5 bg-primary/20 text-primary rounded-full">Connected</span>
                                     </div>
-                                    <div className="flex items-center justify-between">
-                                        <span className="text-sm text-slate-400">Settlement Delay (L1)</span>
-                                        <span className="text-xs font-bold px-2 py-0.5 bg-slate-800 text-slate-300 rounded-full">~12 min</span>
-                                    </div>
                                 </div>
                             </div>
                         </div>
                         <div className="bg-white dark:bg-emerald-950/20 border border-primary/20 p-6 rounded-xl relative overflow-hidden group">
                             <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
                             <div className="relative z-10">
-                                <h4 className="font-bold text-xl mb-4 text-slate-900 dark:text-white">Smart Top-up</h4>
+                                <h4 className="font-bold text-xl mb-4 text-slate-900 dark:text-white">Smart Top-up (Mock)</h4>
                                 <p className="text-sm text-slate-600 dark:text-emerald-500/70 mb-6">
                                     Automatically replenish state channel balances from your treasury when they fall below 10 hours of remaining work.
                                 </p>

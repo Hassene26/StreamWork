@@ -16,12 +16,7 @@ type Status = 'idle' | 'processing' | 'success' | 'error'
 
 // Supported chains for withdrawal
 const SUPPORTED_CHAINS = [
-    { id: 'ETH', name: 'Ethereum', icon: '⟠' },
     { id: 'ETH-SEPOLIA', name: 'Ethereum Sepolia', icon: '⟠' },
-    { id: 'MATIC', name: 'Polygon', icon: '⬡' },
-    { id: 'ARB', name: 'Arbitrum', icon: '🔵' },
-    { id: 'AVAX', name: 'Avalanche', icon: '🔺' },
-    { id: 'SOL', name: 'Solana', icon: '◎' },
 ]
 
 export function BridgeModal({
@@ -189,20 +184,26 @@ export function BridgeModal({
                             {/* Chain Selection */}
                             <div>
                                 <span className="block text-xs text-slate-400 uppercase font-bold tracking-wider mb-2">Destination Chain</span>
-                                <div className="grid grid-cols-3 gap-2">
+                                <div className="flex flex-col gap-2">
                                     {SUPPORTED_CHAINS.map((chain) => (
                                         <button
                                             key={chain.id}
-                                            className={`flex flex-col items-center gap-1 p-2 rounded-lg border transition-all ${selectedChain === chain.id
+                                            className={`flex items-center justify-between p-3 rounded-lg border transition-all ${selectedChain === chain.id
                                                     ? 'bg-primary/10 border-primary text-white'
                                                     : 'bg-black/20 border-[#28392c] text-slate-400 hover:border-primary/50'
                                                 }`}
                                             onClick={() => setSelectedChain(chain.id)}
                                         >
-                                            <span className="text-lg">{chain.icon}</span>
-                                            <span className="text-[10px] font-bold text-center leading-tight">{chain.name}</span>
+                                            <div className="flex items-center gap-3">
+                                                <span className="text-xl">{chain.icon}</span>
+                                                <span className="text-sm font-bold">{chain.name}</span>
+                                            </div>
+                                            {selectedChain === chain.id && <span className="material-symbols-outlined text-primary text-sm">check_circle</span>}
                                         </button>
                                     ))}
+                                    <div className="text-center p-2 border border-dashed border-[#28392c] rounded-lg text-slate-500 text-xs italic">
+                                        More chains coming soon...
+                                    </div>
                                 </div>
                             </div>
 
@@ -212,19 +213,12 @@ export function BridgeModal({
                                 <div className="flex bg-black/30 border border-[#28392c] rounded-lg p-1">
                                     <input
                                         type="text"
-                                        className="flex-1 bg-transparent border-none text-white text-sm px-3 focus:outline-none font-mono placeholder:text-slate-600"
+                                        className="flex-1 bg-transparent border-none text-white text-sm px-3 py-2 focus:outline-none font-mono placeholder:text-slate-600"
                                         value={destinationAddress}
                                         onChange={(e) => setDestinationAddress(e.target.value)}
                                         placeholder="0x..."
                                         disabled={status === 'processing'}
                                     />
-                                    <button
-                                        className="bg-[#28392c] hover:bg-[#3bf169]/20 text-primary text-xs font-bold px-3 py-2 rounded transition-colors"
-                                        onClick={useMyAddress}
-                                        title="Use my Circle wallet address"
-                                    >
-                                        Use Mine
-                                    </button>
                                 </div>
                             </div>
                         </>
@@ -279,13 +273,9 @@ export function BridgeModal({
                                 <span className="text-slate-400">You send</span>
                                 <span className="text-white font-mono">${amountNum.toFixed(2)} USDC</span>
                             </div>
-                            <div className="flex justify-between text-sm">
-                                <span className="text-slate-400">Network fee (est.)</span>
-                                <span className="text-white font-mono">~$0.50</span>
-                            </div>
                             <div className="flex justify-between text-sm pt-2 border-t border-primary/10 font-bold">
-                                <span className="text-slate-300">You receive (approx.)</span>
-                                <span className="text-primary font-mono">${(Math.max(0, amountNum - 0.50)).toFixed(2)}</span>
+                                <span className="text-slate-300">You receive</span>
+                                <span className="text-primary font-mono">${amountNum.toFixed(2)}</span>
                             </div>
                         </div>
                     )}

@@ -6,10 +6,15 @@ import { resolveENSName, isENSName } from '../services/ens'
 import { backendApi } from '../api/backend'
 import { BridgeModal } from '../components/BridgeModal'
 
-const ENS_LINK_KEY = 'streamwork_linked_ens'
-function getLinkedENS(): string | null { return localStorage.getItem(ENS_LINK_KEY) }
-function setLinkedENSStorage(name: string): void { localStorage.setItem(ENS_LINK_KEY, name) }
-function clearLinkedENSStorage(): void { localStorage.removeItem(ENS_LINK_KEY) }
+function getLinkedENS(address: string | null): string | null {
+    if (!address) return null
+    return localStorage.getItem(`streamwork_ens_${address}`)
+}
+
+function setLinkedENSStorage(address: string, name: string): void {
+    if (!address) return
+    localStorage.setItem(`streamwork_ens_${address}`, name)
+}
 
 export function Employee() {
     const {
@@ -27,10 +32,15 @@ export function Employee() {
     } = useCircleWallet()
 
     // ENS linking
-    const [linkedEns, setLinkedEns] = useState<string | null>(getLinkedENS())
+    const [linkedEns, setLinkedEns] = useState<string | null>(null)
     const [ensInput, setEnsInput] = useState('')
     const [isLinkingEns, setIsLinkingEns] = useState(false)
     const [ensLinkError, setEnsLinkError] = useState<string | null>(null)
+
+    // Load linked ENS when address changes
+    useEffect(() => {
+        setLinkedEns(getLinkedENS(circleAddress))
+    }, [circleAddress])
 
     // ENS registration
     const [ensRegInput, setEnsRegInput] = useState('')
@@ -45,6 +55,9 @@ export function Employee() {
 
     // ENS Profile lookup (prefer linked ENS over Circle address)
     const { profile: ensProfile } = useENSProfile(linkedEns || circleAddress || null)
+
+    // Determine display name: Real ENS > Linked (Mock) > null
+    const displayName = ensProfile?.name || linkedEns || null
 
     // Transaction status tracking
     const [txStatus, setTxStatus] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null)
@@ -104,7 +117,9 @@ export function Employee() {
                 return
             }
 
-            setLinkedENSStorage(ensInput)
+            if (circleAddress) {
+                setLinkedENSStorage(circleAddress, ensInput)
+            }
             setLinkedEns(ensInput)
             setEnsInput('')
             setShowLinkExisting(false) // Close modal on success
@@ -132,14 +147,18 @@ export function Employee() {
         setIsCheckingAvailability(true)
         availabilityTimer.current = setTimeout(async () => {
             try {
-                // Mock availability check
-                // In a real app, this would call our backend or a provider
-                await new Promise(resolve => setTimeout(resolve, 800))
-                const isAvailable = Math.random() > 0.3 // Simulate 70% available
-                setEnsAvailability({
-                    available: isAvailable,
-                    price: '0.002 ETH'
-                })
+                // Use backend API to check availability and price
+                const result = await backendApi.checkENSAvailability(label)
+
+                if (result.available) {
+                    setEnsAvailability({
+                        available: true,
+                        price: `${result.price.base} + ${result.price.premium}`
+                    })
+                } else {
+                    setEnsAvailability({ available: false, price: '' })
+                    setEnsRegError(`'${label}.eth' is already registered`)
+                }
             } catch (err: any) {
                 setEnsRegError(err.message || 'Failed to check availability')
             } finally {
@@ -155,36 +174,48 @@ export function Employee() {
     }
 
     const handleRegisterENS = async () => {
-        if (!ensRegInput || !ensAvailability?.available) return
+        if (!ensRegInput || !ensAvailability?.available || !circleAddress) return
 
         setEnsRegStatus('committing')
         setEnsRegError(null)
 
         try {
-            // Commitment phase
-            await new Promise(resolve => setTimeout(resolve, 1500))
+            // Start registration process via backend (Sponsor-payed)
+            const { jobId } = await backendApi.registerENS(ensRegInput, circleAddress)
+
             setEnsRegStatus('waiting')
 
             const poll = async () => {
                 try {
-                    // Polling phase
-                    // In production this checks commit age
-                    setEnsRegStatus('registering')
-                    await new Promise(resolve => setTimeout(resolve, 2000))
-                    setEnsRegStatus('complete')
-                    setLinkedEns(`${ensRegInput}.eth`)
-                    setLinkedENSStorage(`${ensRegInput}.eth`)
-                    setEnsRegInput('')
-                    setShowLinkExisting(false)
+                    const status = await backendApi.getENSRegistrationStatus(jobId)
+
+                    if (status.status === 'error') {
+                        throw new Error(status.error || 'Registration failed')
+                    }
+
+                    if (status.status === 'complete') {
+                        setEnsRegStatus('complete')
+                        const fullName = `${ensRegInput}.eth`
+                        setLinkedEns(fullName)
+                        if (circleAddress) {
+                            setLinkedENSStorage(circleAddress, fullName)
+                        }
+                        setEnsRegInput('')
+                        return
+                    }
+
+                    // Update status and keep polling
+                    setEnsRegStatus(status.status)
+                    pollTimer.current = setTimeout(poll, 3000)
                 } catch (err: any) {
                     setEnsRegError(err.message || 'Registration failed')
                     setEnsRegStatus('error')
                 }
             }
 
-            // Start countdown
+            // Start countdown for UX
             setEnsCountdown(65)
-            // Start polling after a brief delay
+            // Start polling
             pollTimer.current = setTimeout(poll, 3000)
         } catch (err: any) {
             setEnsRegError(err.message || 'Failed to start registration')
@@ -294,19 +325,6 @@ export function Employee() {
         )
     }
 
-    if (isCircleRestoring) {
-        return (
-            <div className="min-h-screen flex items-center justify-center px-4 bg-background-dark">
-                <div className="bg-[#1a2e1e] border border-[#28392c] rounded-xl p-8 text-center">
-                    <div className="flex items-center justify-center gap-3 text-slate-400">
-                        <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
-                        <span>Restoring session...</span>
-                    </div>
-                </div>
-            </div>
-        )
-    }
-
     const currentBalance = parseFloat(circleBalance || '0')
     const totalEarnings = (currentBalance + liveEarnings).toFixed(4)
     const [mainPart, decimalPart] = totalEarnings.split('.')
@@ -327,8 +345,6 @@ export function Employee() {
                         </div>
                         <div className="hidden md:flex items-center gap-6">
                             <Link className="text-slate-400 hover:text-primary text-sm font-medium transition-colors" to="/employee">Dashboard</Link>
-                            <Link className="text-slate-400 hover:text-primary text-sm font-medium transition-colors" to="#">Streams</Link>
-                            <Link className="text-slate-400 hover:text-primary text-sm font-medium transition-colors" to="/withdrawal">Wallet</Link>
                             <Link className="text-slate-400 hover:text-primary text-sm font-medium transition-colors" to="/settings">Network</Link>
                         </div>
                     </div>
@@ -341,13 +357,21 @@ export function Employee() {
                                 <span className="material-symbols-outlined text-[20px]">settings</span>
                             </Link>
                         </div>
-                        <div className="flex items-center gap-3 pl-4 border-l border-[#28392c]">
+                        <div
+                            className="flex items-center gap-3 pl-4 border-l border-[#28392c] cursor-pointer hover:bg-slate-100 dark:hover:bg-emerald-900/30 rounded-lg px-3 py-1.5 border border-transparent hover:border-slate-200 dark:hover:border-emerald-800/50 transition-colors"
+                            onClick={circleLogout}
+                        >
                             <div className="text-right hidden sm:block">
-                                <p className="text-xs text-slate-400 font-medium">{linkedEns || 'Anonymous'}</p>
-                                <p className="text-[10px] text-primary">Verified Talent</p>
+                                <p className="text-xs text-slate-400 font-medium">
+                                    {displayName || (circleAddress ? `${circleAddress.slice(0, 6)}...${circleAddress.slice(-4)}` : 'Connecting...')}
+                                </p>
                             </div>
-                            <div className="bg-center bg-no-repeat aspect-square bg-cover rounded-full size-10 border-2 border-primary/30"
-                                style={{ backgroundImage: `url("${ensProfile?.avatar || 'https://lh3.googleusercontent.com/aida-public/AB6AXuBP7svBsC9yn86C_UTZyR9qxzB5IyMM6N_tNvoau2_Qe-DjoLngVAsyfgp7f83q6d3vGzTTpSrduvWmSsp1GIZzfn0yPdp3o59kiFlwgpz6VqWVhL8PI1mhJdQ0UwUPN7iNugiHQvV3eLVzrigrERdemoCh2gwXqi23FQYzw5K4-Ui5MOtCSEInWrgPKUh1b4GzevBiK6vBz1QF1R37-Bi-6o07Xux_CytkgvOkbI1bG46Y6_LtOmm31Ug-7VzL-lBCmk6UZpcSkVYD'}")` }}></div>
+                            <div className="h-10 w-10 rounded-full bg-gradient-to-tr from-emerald-500 to-primary flex items-center justify-center text-sm font-bold text-white shadow-sm border-2 border-primary/30">
+                                {displayName
+                                    ? displayName.slice(0, 2).toUpperCase()
+                                    : (circleAddress ? circleAddress.slice(2, 4).toUpperCase() : '??')
+                                }
+                            </div>
                         </div>
                     </div>
                 </header>
@@ -368,7 +392,7 @@ export function Employee() {
                                         <span className="text-primary text-4xl md:text-5xl font-bold ticker-font glow-green">{decimalPart}</span>
                                     </div>
                                     <p className="text-slate-400 text-sm mt-4 font-medium">
-                                        Secured by <span className="text-white">Circle's Arc</span> via Ethereum Layer 2
+                                        Secured by <span className="text-white">Yellow network</span>
                                     </p>
                                     <div className="mt-6 flex gap-3">
                                         <span className="bg-[#28392c] text-primary text-[10px] px-3 py-1 rounded-full border border-primary/20 font-bold uppercase">USD-C Stream</span>
@@ -408,7 +432,6 @@ export function Employee() {
                                                 <p className="text-slate-400 text-sm">Earned So Far (Cycle)</p>
                                                 <p className="text-white text-xl font-bold">${totalEarnings}</p>
                                             </div>
-                                            <p className="text-slate-400 text-sm font-bold">42.4%</p>
                                         </div>
                                         <div className="w-full h-3 bg-[#28392c] rounded-full overflow-hidden">
                                             <div className="bg-primary h-full rounded-full shadow-[0_0_10px_rgba(19,236,73,0.4)]" style={{ width: '42.4%' }}></div>
@@ -417,20 +440,13 @@ export function Employee() {
                                     <div className="mt-8 grid grid-cols-2 sm:grid-cols-4 gap-4">
                                         <div className="bg-[#28392c]/40 p-4 rounded-lg border border-white/5">
                                             <p className="text-slate-500 text-[10px] font-bold uppercase mb-1">Start Date</p>
-                                            <p className="text-white text-sm font-bold">Oct 12, 2023</p>
+                                            <p className="text-white text-sm font-bold">Feb 08, 2026</p>
                                         </div>
                                         <div className="bg-[#28392c]/40 p-4 rounded-lg border border-white/5">
                                             <p className="text-slate-500 text-[10px] font-bold uppercase mb-1">End Date</p>
-                                            <p className="text-white text-sm font-bold">Oct 12, 2024</p>
+                                            <p className="text-white text-sm font-bold">Mar 08, 2026</p>
                                         </div>
-                                        <div className="bg-[#28392c]/40 p-4 rounded-lg border border-white/5">
-                                            <p className="text-slate-500 text-[10px] font-bold uppercase mb-1">Network</p>
-                                            <p className="text-white text-sm font-bold">Circle Arc</p>
-                                        </div>
-                                        <div className="bg-[#28392c]/40 p-4 rounded-lg border border-white/5">
-                                            <p className="text-slate-500 text-[10px] font-bold uppercase mb-1">Stability</p>
-                                            <p className="text-primary text-sm font-bold">99.9% Uptime</p>
-                                        </div>
+
                                     </div>
                                 </div>
                             </section>
@@ -466,7 +482,7 @@ export function Employee() {
                                     Wallet Operations
                                 </h3>
                                 <div className="mb-8">
-                                    <label className="text-slate-400 text-[10px] font-bold uppercase tracking-wider mb-2 block">Linked Payout Account</label>
+                                    <label className="text-slate-400 text-[10px] font-bold uppercase tracking-wider mb-2 block">Linked Payout Account (Mock)</label>
                                     <div className="flex items-center justify-between bg-black/30 p-4 rounded-lg border border-white/5">
                                         <div className="flex items-center gap-3">
                                             <div className="size-8 bg-blue-600 rounded flex items-center justify-center font-bold text-white text-[10px]">MP</div>
@@ -486,15 +502,70 @@ export function Employee() {
                                         <span className="material-symbols-outlined">payments</span>
                                         Withdraw
                                     </button>
-                                    <button className="w-full bg-transparent border border-[#28392c] hover:border-primary/50 text-white font-bold py-4 rounded-lg transition-all flex items-center justify-center gap-2">
-                                        <span className="material-symbols-outlined text-primary">analytics</span>
-                                        View Arc Transactions
-                                    </button>
+
                                 </div>
                                 <p className="text-center text-slate-500 text-[10px] mt-6">
-                                    Estimated time to bank: <span className="text-primary">Instant (PIX Network)</span>
+                                    Estimated time to bank: <span className="text-primary">Instant </span>
                                 </p>
                             </section>
+
+                            {/* ENS Registration Section */}
+                            {!displayName && (
+                                <section className="bg-[#1a2e1e] border border-primary/20 rounded-xl p-6">
+                                    <h3 className="text-white font-bold mb-4 flex items-center gap-2">
+                                        <span className="material-symbols-outlined text-primary">id_card</span>
+                                        Register ENS Name
+                                    </h3>
+
+                                    {ensRegStatus === 'idle' || ensRegStatus === 'error' ? (
+                                        <div className="space-y-4">
+                                            <div>
+                                                <label className="text-slate-400 text-[10px] font-bold uppercase tracking-wider mb-2 block">Choose your Web3 Username</label>
+                                                <div className="relative">
+                                                    <input
+                                                        type="text"
+                                                        className={`w-full bg-black/30 border rounded-lg px-4 py-3 text-white text-sm focus:outline-none ${ensRegInput && (ensAvailability?.available ? 'border-primary' : 'border-red-500/50') || 'border-white/10'}`}
+                                                        placeholder="username"
+                                                        value={ensRegInput}
+                                                        onChange={(e) => handleEnsRegInputChange(e.target.value)}
+                                                    />
+                                                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 text-sm font-bold">.eth</span>
+                                                </div>
+                                                {isCheckingAvailability && <p className="text-slate-400 text-[10px] mt-2">Checking availability...</p>}
+                                                {ensRegError && <p className="text-red-400 text-[10px] mt-2">{ensRegError}</p>}
+                                                {ensAvailability?.available && (
+                                                    <p className="text-primary text-[10px] mt-2 font-bold flex items-center gap-1">
+                                                        <span className="material-symbols-outlined text-[14px]">check_circle</span>
+                                                        Available! Est. Cost: {ensAvailability.price}
+                                                    </p>
+                                                )}
+                                            </div>
+                                            <button
+                                                className="w-full bg-white text-slate-900 font-bold py-3 rounded-lg hover:bg-slate-100 transition-all disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                                                onClick={handleRegisterENS}
+                                                disabled={!ensAvailability?.available}
+                                            >
+                                                Register Name
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <div className="text-center py-6">
+                                            <div className="w-12 h-12 rounded-full bg-primary/10 border-2 border-primary border-t-transparent animate-spin mx-auto mb-4"></div>
+                                            <h4 className="text-white font-bold text-sm mb-1">
+                                                {ensRegStatus === 'committing' && 'Committing...'}
+                                                {ensRegStatus === 'waiting' && 'Waiting...'}
+                                                {ensRegStatus === 'registering' && 'Registering...'}
+                                                {ensRegStatus === 'complete' && 'Success!'}
+                                            </h4>
+                                            <p className="text-slate-400 text-xs">
+                                                {ensRegStatus === 'waiting' && `${ensCountdown}s remaining`}
+                                                {ensRegStatus !== 'waiting' && 'Confirming on-chain'}
+                                            </p>
+                                        </div>
+                                    )}
+                                </section>
+                            )}
+
                             {/* Exchange Rate/Info Card */}
                             <section className="bg-background-dark border border-[#28392c] rounded-xl p-6">
                                 <h4 className="text-white font-bold text-sm mb-4">Network Insights</h4>
@@ -503,35 +574,10 @@ export function Employee() {
                                         <span className="text-slate-500 text-xs">Gas Price (L2)</span>
                                         <span className="text-white text-xs font-bold">&lt; $0.001</span>
                                     </div>
-                                    <div className="flex justify-between items-center">
-                                        <span className="text-slate-500 text-xs">USD/BRL Rate</span>
-                                        <span className="text-white text-xs font-bold">R$ 4.92</span>
-                                    </div>
-                                    <div className="flex justify-between items-center">
-                                        <span className="text-slate-500 text-xs">Arc Stability</span>
-                                        <div className="flex gap-1">
-                                            <div className="w-1 h-3 bg-primary rounded-full"></div>
-                                            <div className="w-1 h-3 bg-primary rounded-full"></div>
-                                            <div className="w-1 h-3 bg-primary rounded-full"></div>
-                                            <div className="w-1 h-3 bg-primary rounded-full"></div>
-                                            <div className="w-1 h-3 bg-primary rounded-full opacity-30"></div>
-                                        </div>
-                                    </div>
                                 </div>
                             </section>
                             {/* Support Card */}
-                            <div className="bg-gradient-to-br from-[#28392c] to-background-dark p-6 rounded-xl border border-white/5 relative group">
-                                <div className="flex items-start justify-between">
-                                    <div>
-                                        <h4 className="text-white font-bold text-sm">Nexus Support</h4>
-                                        <p className="text-slate-400 text-xs mt-1">Chat with your stream manager.</p>
-                                    </div>
-                                    <div className="size-10 rounded-full bg-white/10 flex items-center justify-center text-white">
-                                        <span className="material-symbols-outlined">forum</span>
-                                    </div>
-                                </div>
-                                <button className="mt-4 text-xs font-bold text-primary group-hover:underline">Open Live Chat →</button>
-                            </div>
+
                         </aside>
                     </div>
                 </main>
@@ -559,15 +605,6 @@ export function Employee() {
                 onWithdrawToWallet={handleWithdrawToWallet}
                 onWithdrawToBank={handleWithdrawToBank}
             />
-
-            {/* Hidden copy button logic preserved from original file but using new UI triggers if needed,
-                though new UI has specific buttons for it.
-                I'll keep the ENS Registration modal/view hidden for now as the new design doesn't explicitly show it,
-                but I'll add a 'hidden' section for it if we need to restore it, or relying on Settings page for ENS.
-                The prompt asked to preserve functionality. The new Settings page design (code4) has "Edit ENS",
-                so the ENS registration logic might be better placed there in the next phase.
-                For now, I'll keep the state variables but they aren't rendered in this specific view.
-            */}
         </div>
     )
 }
